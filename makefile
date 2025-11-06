@@ -6,7 +6,7 @@ CC = clang
 INCLUDE = -I/home/ibrahim/include/
 
 #	Library path
-LIB = -L/home/ibrahim/lib/
+LIB = -Lbuild/
 
 #
 #
@@ -27,7 +27,7 @@ CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-co
 
 
 
-LDFLAGS = -L. -lstdc++ -lm -lchaos
+LDFLAGS = $(LIB) -lstdc++ -lm -lchaos
 
 
 
