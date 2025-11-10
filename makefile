@@ -2,11 +2,18 @@ CC = clang
 #CC = gcc
 
 
-#	Extra header files here; use absolute path
+#	Extra header files here
 INCLUDE = -I/home/ibrahim/include/
 
+#	Build path (test also uses local library)
+BUILD = build/
+
+#	Test path; careful with trailing spaces here...
+TEST = test/
+
 #	Library path
-LIB = -Lbuild/
+LIB = -L$(BUILD)
+
 
 #
 #
@@ -55,19 +62,19 @@ chaos.o: chaos.h chaos.cpp
 #	Create the (static) chaos library file
 #
 lib-chaos: chaos.o
-	ar crs build/libchaos.a chaos.o
+	ar crs $(BUILD)libchaos.a chaos.o
 
 #
 #	Create an executable file with tests for the chaos library
 #
 test-chaos:	lib-chaos test.cpp
-	$(CC) $(CPPFLAGS) -o test/test-chaos test.cpp $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -o $(TEST)test-chaos test.cpp $(LDFLAGS)
 
 #
 #	Run the tests
 #
 test:	test-chaos
-	test/test-chaos
+	$(TEST)test-chaos
 
 clean:
-	rm -f *.o *.a test-chaos
+	rm -f *.o *.a $(BUILD)* $(TEST)*

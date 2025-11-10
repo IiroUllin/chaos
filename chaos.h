@@ -16,19 +16,23 @@
 #include "generic.h"				//	My generic definitions
 
 
+#define CHAOS_STATE_SIZE 2			//	State size in qwords
+#define CHAOS_CACHE_SIZE 8			//	Cache size in qwords
+
 namespace chs {
 
 	//
-	//	128bit structure to contain RNG state
+	//	Object containing the RNG state
 	//
 	class RNG {
 		private:
-			uint64_t state[2] = {0};	//	NOTE: xoroshiro128+ does not change 0
+			uint64_t state[CHAOS_STATE_SIZE] = {0};		//	NOTE: xoroshiro128+ does not change 0
 			union {
-				uint64_t i64[2];		//	A couple qwords to store stuff,
-				fp64_t f64[2];			//	e.g., Gaussian random variables in Box-Muller
+				uint64_t i64[CHAOS_CACHE_SIZE];			//	A couple qwords to store stuff,
+				fp64_t f64[CHAOS_CACHE_SIZE];			//	e.g., Gaussian random variables in Box-Muller
 			} cache = {.i64 = {NaN}};	//	Initialize with NaN			
 		public:
+			//	Clone the state 
 			//	Hashing function for seeding the RNG state
 			//	<data> is supposed to be 64 bit (8 byte) aligned; <length> >= 8 (in bytes)
 			//	WARNING: data is consumed in 64 bit chunks

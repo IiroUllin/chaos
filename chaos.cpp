@@ -22,7 +22,7 @@ static inline uint64_t rotl(const uint64_t state, const int amount) {
 //
 //	Generate random 64 bits via xoroshiro128+
 //	The <result> is calculated after the state change, not before, as in the original implementation
-//	NOTE: the <state> is modified
+//	NOTE: the <state[0,1]> are modified 
 //
 static inline uint64_t next(uint64_t* state) {
 	uint64_t s0 = state[0];
@@ -89,7 +89,7 @@ uint64_t chs::mix64(uint64_t state) {
 //
 //	128 bit hashing function:
 //	Takes <length> bytes from <data>
-//	and hashes it into the chs::RNG.state (two qwords) 
+//	and hashes it into the chs::RNG.state[0,1] (two qwords) 
 //	NOTE: <data> must be aligned and <length> should contain at least one 64 bit chunk
 //
 void chs::RNG::hash(const void* data, std::size_t length){
