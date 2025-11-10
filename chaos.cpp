@@ -20,22 +20,17 @@ static inline uint64_t rotl(const uint64_t state, const int amount) {
 }
 
 //
-//	Generate random 64 bits via xoroshiro128+
-//	The <result> is calculated after the state change, not before, as in the original implementation
-//	NOTE: the <state[0,1]> are modified 
+//	Evolve the <state> using xoroshiro128+
+//	The <result> is is the sum <state[0] + state[1]> 
 //
-static inline uint64_t next(uint64_t* state) {
+static inline void next(uint64_t* state) {
 	uint64_t s0 = state[0];
 	uint64_t s1 = state[1];
 
 	s1 ^= s0;
-	s0 = rotl(s0, 24) ^ s1 ^ (s1 << 16);
-	s1 = rotl(s1, 37);
 
-	state[0] = s0;
-	state[1] = s1;
-
-	return s0 + s1;
+	state[0] = rotl(s0, 24) ^ s1 ^ (s1 << 16);
+	state[1] = rotl(s1, 37);
 }
 
 //
@@ -48,11 +43,11 @@ static void jump(uint64_t* state) {
 	uint64_t s1 = 0;
 	for(int i = 0; i < 2; i++)
 		for(int b = 0; b < 64; b++) {
-			if (JUMP[i] & uint64_t(1) << b) {	//	Maybe to make this endianess-indifferent?
+			if (JUMP[i] & uint64_t(1) << b) {	//	...maybe makes this endianess-indifferent?
 				s0 ^= state[0];
 				s1 ^= state[1];
 			}
-			next(state);						//	Modify the state, discard the output
+			::next(state);						//	Evolve the state
 		}
 
 	state[0] = s0;
@@ -118,33 +113,50 @@ void chs::RNG::hash(const void* data, std::size_t length){
 	length >>= 3;								//	original length is in bytes, this one is in qwords (64 bits)
 	assert(!(uintptr_t(data) & 0b111));			//	Last 3 bits must be 0 for int64-aligned data
 	uint64_t* qw_data = (uint64_t*) data;		//	Convert <data> into uint64 pointer
-	int index = 0;								//	Currently updated entry of the <state>
+	int i = 0;									//	Currently updated entry of the <state>
 
 	state[0] = 0;	state[1] = 0;				//	Reset the state...
 	cache = {NaN};								//	...and cache
-		
+	index = 0;									//	Start with <state[0,1]>
+
+	
 	while (length > 0) {
-		state[index] ^= chs::mix64(*qw_data);	//	Mix current data chunck and merge it into the <state[index]> 
-		index ^= 1;								//	0->1 and 1->0
+		state[i] ^= chs::mix64(*qw_data);		//	Mix current data chunk and merge it into the <state[i]> 
+		i ^= 1;									//	0->1 and 1->0
 		//	Mix its mixture into the "other" state qword
-		//	NOTE: the constant here is just random and not optimized in any way
-		state[index] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
+		//	NOTE: the constant here is ad hoc and not optimized in any way
+		state[i] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
 		qw_data++; length--;
 	}
 
 	//	Generate three more states for SIMD processing using the jump function
-	for (int i = 2; i < 8; i += 2) {
+	for (i = 2; i < 8; i += 2) {
 		state[i] = state[i-2]; 
 		state[i+1] = state[i-1]; 
 		jump(&state[i]);
 	}
 }
 
+
+//
+//	Generate random 64 bits, increment the <index>
+//	Generate new state when index exceeds 3
+//
+uint64_t chs::RNG::next(){
+	uint64_t result = state[index] + state[index+1];	//	xoroshiro128+ returns the sum of <state>'s 64 bits
+	index = (index + 2) & 0b111;						//	Increment the index mod 8: 8 -> 0
+	if (!index)											//	If index was reset to 0, generate 4 new RNG states
+		for (int i = 0; i < 8; i+=2) ::next(&state[i]);
+
+	return result;
+}
+
+
 //
 //	Generate random 64 bits (xoroshiro128+ algorithm)
 //
 uint64_t chs::RNG::int64(){
-	return next(state);
+	return next();
 }
 
 
@@ -160,7 +172,7 @@ uint64_t chs::RNG::int64(){
 //	already near values around 30 (or even earlier, depending on required precision)...
 //	
 fp64_t chs::RNG::U01(){
-	return 5.42101086242752217003726400434970855712890625e-20 * next(state);	//	2^(-64)
+	return 5.42101086242752217003726400434970855712890625e-20 * next();			//	2^(-64)
 }
 
 
@@ -179,7 +191,7 @@ fp64_t chs::RNG::U12(){
 
 	//	Use the highest 52 bits for mantissa (shift them to the lowest 52 bits of i64)
 	//	Set the top 12 bits to 001111111111 which creates "+" sign and exponent 1023 (0 after bias)
-	result.i64 = (next(state) >> 12) | 0x3FF0000000000000U;
+	result.i64 = (next() >> 12) | 0x3FF0000000000000U;
 	return result.f64;		//	Return the corresponding FP value
 }
 

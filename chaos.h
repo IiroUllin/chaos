@@ -40,15 +40,17 @@ namespace chs {
 		private:
 			uint64_t state[CHAOS_STATE_SIZE] = {0};		//	NOTE: xoroshiro128+ does not change 0
 			union {
-				uint64_t i64[CHAOS_CACHE_SIZE];			//	A couple qwords to store stuff,
+				uint64_t i64[CHAOS_CACHE_SIZE];			//	A couple qwords to store extra stuff,
 				fp64_t f64[CHAOS_CACHE_SIZE];			//	e.g., Gaussian random variables in Box-Muller
-			} cache = {.i64 = {NaN}};	//	Initialize with NaN			
+			} cache = {.i64 = {NaN}};					//	Initialize with NaN
+			int index = 0;								//	{0,1,2,3} contains index of the <state> element currently in line for RNG
+			uint64_t next();							//	Generate random 64 bits, increment the <index>, generate new <state> when needed
 		public:
 			//	Clone the state 
 			//	Hashing function for seeding the RNG state
 			//	<data> is supposed to be 64 bit (8 byte) aligned; <length> >= 8 (in bytes)
-			//	WARNING: data is consumed in 64 bit chunks
-			//	if <length> is not divisible by 8, the leftovers are not utilized
+			//	WARNING: data is consumed in 64 bit chunks:
+			//	...if <length> is not divisible by 8, the leftovers are not utilized
 			void hash(const void* data, std::size_t length);
 
 			uint64_t int64();			//	random 64 bits
