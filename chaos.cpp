@@ -38,7 +38,26 @@ static inline uint64_t next(uint64_t* state) {
 	return s0 + s1;
 }
 
+//
+//	xoroshiro128+ jump function, equivalent to 2^64 calls to next()
+//
+static void jump(uint64_t* state) {
+	static const uint64_t JUMP[] = {0xdf900294d8f554a5U, 0x170865df4b3201fcU};
 
+	uint64_t s0 = 0;
+	uint64_t s1 = 0;
+	for(int i = 0; i < 2; i++)
+		for(int b = 0; b < 64; b++) {
+			if (JUMP[i] & uint64_t(1) << b) {	//	Maybe to make this endianess-indifferent?
+				s0 ^= state[0];
+				s1 ^= state[1];
+			}
+			next(state);						//	Modify the state, discard the output
+		}
+
+	state[0] = s0;
+	state[1] = s1;
+}
 
 
 //
@@ -89,8 +108,10 @@ uint64_t chs::mix64(uint64_t state) {
 //
 //	128 bit hashing function:
 //	Takes <length> bytes from <data>
-//	and hashes it into the chs::RNG.state[0,1] (two qwords) 
+//	and hashes it into the chs::RNG.state[0,1] (two qwords)
+//	<state[2-7]> are then generated using the xoroshiro128+ jump function.
 //	NOTE: <data> must be aligned and <length> should contain at least one 64 bit chunk
+//	NOTE: this will erase the <state> and <cache> even if <length> < 8 and no data is hashed
 //
 void chs::RNG::hash(const void* data, std::size_t length){
 	assert(length >= 8);						//	<data> must contain at least one 64 bit block
@@ -99,19 +120,23 @@ void chs::RNG::hash(const void* data, std::size_t length){
 	uint64_t* qw_data = (uint64_t*) data;		//	Convert <data> into uint64 pointer
 	int index = 0;								//	Currently updated entry of the <state>
 
-	state[0] = 0;	state[1] = 0;				//	Reset the state first
-	//	NOTE: this will erase the <state> even if <length> < 8 and no data is hashed
-
-	//	NOTE: The cache is also cleared
-	cache = {NaN};
+	state[0] = 0;	state[1] = 0;				//	Reset the state...
+	cache = {NaN};								//	...and cache
 		
 	while (length > 0) {
 		state[index] ^= chs::mix64(*qw_data);	//	Mix current data chunck and merge it into the <state[index]> 
 		index ^= 1;								//	0->1 and 1->0
 		//	Mix its mixture into the "other" state qword
 		//	NOTE: the constant here is just random and not optimized in any way
-		state[index] ^= chs::mix64(*qw_data ^ 0x543210123456789U);	
+		state[index] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
 		qw_data++; length--;
+	}
+
+	//	Generate three more states for SIMD processing using the jump function
+	for (int i = 2; i < 8; i += 2) {
+		state[i] = state[i-2]; 
+		state[i+1] = state[i-1]; 
+		jump(&state[i]);
 	}
 }
 

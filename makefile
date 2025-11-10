@@ -15,15 +15,21 @@ TEST = test/
 LIB = -L$(BUILD)
 
 
+#	AVX512 switches
+SIMD = -mavx2
+
+#	These are AVX512 -- don't seem to work on Lunar Lake
+#SIMD = -mavx512f -mavx512vl -mavx512bw -mavx512dq
+
 #
 #
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on -DNDEBUG
+#CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) -DNDEBUG
 #
 #	DEBUG:
-#CPPFLAGS = $(INCLUDE) -std=c++11 -Werror -O2 -ffp-model=precise
+CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
 #
@@ -77,4 +83,4 @@ test:	test-chaos
 	$(TEST)test-chaos
 
 clean:
-	rm -f *.o *.a $(BUILD)* $(TEST)*
+	rm -f *.o *.a $(BUILD)libchaos.a $(TEST)test-chaos
