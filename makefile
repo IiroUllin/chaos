@@ -11,6 +11,9 @@ BUILD = build/
 #	Test path; careful with trailing spaces here...
 TEST = test/
 
+#	Object and temporary files
+OBJ = obj/
+
 #	Library path
 LIB = -L$(BUILD)
 
@@ -60,7 +63,7 @@ LDFLAGS = $(LIB) -lstdc++ -lm -lchaos
 
 
 chaos.o: chaos.h chaos.cpp
-	$(CC) $(CPPFLAGS) -c chaos.cpp -o chaos.o
+	$(CC) $(CPPFLAGS) -c chaos.cpp -o $(OBJ)chaos.o
 
 
 
@@ -68,7 +71,7 @@ chaos.o: chaos.h chaos.cpp
 #	Create the (static) chaos library file
 #
 lib-chaos: chaos.o
-	ar crs $(BUILD)libchaos.a chaos.o
+	ar crs $(BUILD)libchaos.a $(OBJ)chaos.o
 
 #
 #	Create an executable file with tests for the chaos library
@@ -83,4 +86,4 @@ test:	test-chaos
 	$(TEST)test-chaos
 
 clean:
-	rm -f *.o *.a $(BUILD)libchaos.a $(TEST)test-chaos
+	rm -f $(BUILD)libchaos.a $(TEST)test-chaos $(OBJ)*
