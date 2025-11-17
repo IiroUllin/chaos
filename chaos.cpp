@@ -23,14 +23,18 @@ static inline uint64_t rotl(const uint64_t state, const int amount) {
 //	Evolve the <state> using xoroshiro128+
 //	The <result> is is the sum <state[0] + state[1]> 
 //
-static inline void next(uint64_t* state) {
+static inline uint64_t next(uint64_t* state) {
 	uint64_t s0 = state[0];
 	uint64_t s1 = state[1];
 
 	s1 ^= s0;
 
-	state[0] = rotl(s0, 24) ^ s1 ^ (s1 << 16);
-	state[1] = rotl(s1, 37);
+	s0 = rotl(s0, 24) ^ s1 ^ (s1 << 16);
+	s1 = rotl(s1, 37);
+
+	state[0] = s0; state[1] = s1;
+
+	return s0 + s1;
 }
 
 //
@@ -111,10 +115,10 @@ static inline fp64_t chs::U01(uint64_t bits) {
 
 
 //
-//	128 bit hashing function:
+//	128 bit hashing function.
 //	Takes <length> bytes from <data>
-//	and hashes it into the chs::RNG.state[0,1] (two qwords)
-//	<state[2-7]> are then generated using the xoroshiro128+ jump function.
+//	and hashes it into i64[0,1] (two qwords)
+//	remaining streams are then generated using the xoroshiro128+ jump function.
 //	NOTE: <data> must be aligned and <length> should contain at least one 64 bit chunk
 //	NOTE: this will erase the <state> and <cache> even if <length> < 8 and no data is hashed
 //
@@ -126,7 +130,6 @@ void chs::RNG::hash(const void* data, std::size_t length){
 	int i = 0;									//	Currently updated qword of the first <state>
 
 	i64[0] = 0;	i64[1] = 0;						//	Clear the bits of the 1st bit stream
-	activeStream = 0;	activeType = Void;		//	Re-initialize default values
 
 	while (length > 0) {
 		i64[i] ^= chs::mix64(*qw_data);			//	Mix current data chunk and merge it into the <state> 
@@ -143,43 +146,42 @@ void chs::RNG::hash(const void* data, std::size_t length){
 		i64[i+1] = i64[i-1]; 
 		jump(&i64[i]);
 	}
+
+	activeStream = chs::STREAM_NUM-1;			//	Now calling next() will make activeStream == 0,
+	next();										//	call xoroshiro on all hashed  bits, and generate UInt64 cache
 }
 
 
 //
-//	Generate new states for all streams
+//	Increment activeStream and generate new states for all streams
+//	once all current streams have been used. 
 //
 void chs::RNG::next(){
-	//	The state occupies two qwords, so multiply i by 2 (i<<1) to get the right address
-	for (int i = 0; i < chs::STREAM_NUM; i++) ::next(&i64[i<<1]);
-}
-
-//
-//		
-//
-void chs::RNG::next(Distribution type){
 	activeStream++;									//	Move to the next stream
 													//	Expect that activeStream < STREAM_NUM
 	if (__builtin_expect(activeStream == chs::STREAM_NUM, false)){
 		activeStream = 0;							//	Start from 0 again...
-		activeType = Void;							//	...and indicate that the cache is empty
-		next();										//	Generate new states
+		activeType = UInt64;						//	...default: random integers
+		//	Call xoroshiro's next() function for all streams
+		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2)
+			cui[i>>1] = ::next(&i64[i]);			//	Evolve the state and store UInt64 in the cache
 	}
 
-	if (__builtin_expect(type != activeType, false))
-		generate(type);								//	Regenerate the cache if not the same type as before: done
+	activeType = UInt64;
+
+	//if (__builtin_expect(type != activeType, false))
+	//	generate(type);								//	Regenerate the cache if not the same type as before: done
 
 }
 
 //
 //	Currently regenerates the entire cache
-//	-- sufficient to only go from activeStream and on
+//	-- sufficient to only go from activeStream on
 //
 void chs::RNG::generate(Distribution type){
 	switch (type) {
 		case UFP01: break;
-		case UInt64: for (int i = 0; i < chs::STREAM_NUM; i++) cui[i] = i64[i<<1] + i64[(i<<1) + 1]; break;
-		case Void: break;
+		case UInt64: for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) cui[i>>1] = i64[i] + i64[i + 1]; break;
 		default:;
 	}
 
@@ -187,6 +189,14 @@ void chs::RNG::generate(Distribution type){
 }
 
 
+//
+//	Knuth's MMIX RNG: LCG generator employing just i64[0]
+//	Use for testing and benchmarking purposes ONLY!
+//
+fp64_t chs::RNG::U01_lcg(){
+	i64[0] = i64[0] * 6364136223846793005 + 1442695040888963407;
+	return ldexp((fp64_t) i64[0], -64);
+}
 
 //
 //	Generate random 64 bits (xoroshiro128+ algorithm)
@@ -194,10 +204,10 @@ void chs::RNG::generate(Distribution type){
 uint64_t chs::RNG::int64(){
 	//	Check if cache contains UInt64 values
 	if (__builtin_expect(activeType != UInt64, false))
-		generate(UInt64);							//	If not, regenerate the cache
+		generate(UInt64);							//	If not: regenerate the cache
 
 	uint64_t result = cui[activeStream];			//	Value from the current stream
-	next(UInt64);									//	Move to next stream; generate new bits if needed
+	next();											//	Move to next stream; generate new bits if needed
 	return result;
 }
 
@@ -214,8 +224,13 @@ uint64_t chs::RNG::int64(){
 //	already near values around 30 (or even earlier, depending on required precision)...
 //	
 fp64_t chs::RNG::U01(){
-	next(UInt64);
-	return 5.42101086242752217003726400434970855712890625e-20 * cui[activeStream];			//	2^(-64)
+	//	Check if cache contains UInt64 values
+	if (__builtin_expect(activeType != UInt64, false))
+		generate(UInt64);							//	If not: regenerate the cache
+
+	uint64_t result = cui[activeStream];			//	Value from the current stream
+	next();											//	Move to next stream; generate new bits if needed
+	return 5.42101086242752217003726400434970855712890625e-20 * result;			//	2^(-64)
 }
 
 

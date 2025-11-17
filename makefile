@@ -31,7 +31,7 @@ SIMD = -mavx2
 #CPPFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
 #
 #	DEBUG:
-CPPFLAGS = -I$(INCDIR) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
+CPPFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
 #

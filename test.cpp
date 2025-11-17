@@ -109,10 +109,11 @@ int main() {
 	};
 	//	There must be a more elegant way to do this...
 	std::vector <Sampler> X = {
-		{.func = [&](){return rng.U12();}, .id = "Unif[1,2)\t\t"},
-		{.func = [&](){return rng.U01();}, .id = "Unif[0,1]\t\t"},
-		{.func = [&](){return rng.N01();}, .id = "N(0,1) (Rejection)\t"},
-		{.func = [&](){return rng.n01();}, .id = "N(0,1) (Box-Muller)\t"}
+		{.func = [&](){return rng.U01_lcg();},	.id = "LCG benchmark\t\t"},
+		{.func = [&](){return rng.U12();},		.id = "Unif[1,2)\t\t"},
+		{.func = [&](){return rng.U01();},		.id = "Unif[0,1]\t\t"},
+		{.func = [&](){return rng.N01();},		.id = "N(0,1) (Rejection)\t"},
+		{.func = [&](){return rng.n01();},		.id = "N(0,1) (Box-Muller)\t"}
 	};
 
 	//
