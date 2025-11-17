@@ -1,27 +1,26 @@
 CC = clang
-#CC = gcc
 
 
 #	Extra header files here
-INCLUDE = -I/home/ibrahim/include/
+INCDIR = /home/ibrahim/include/
 
-#	Build path (test also uses local library)
-BUILD = build/
+#	Build path 
+BUILDDIR = build/
 
-#	Test path; careful with trailing spaces here...
-TEST = test/
+#	Test (executable) path
+TESTDIR = test/
 
 #	Object and temporary files
-OBJ = obj/
+OBJDIR = obj/
 
-#	Library path
-LIB = -L$(BUILD)
+#	Library path (will look for lib-chaos here)
+LIBDIR = $(BUILDDIR)
 
 
 #	AVX512 switches
 SIMD = -mavx2
 
-#	These are AVX512 -- don't seem to work on Lunar Lake
+#	These enable AVX512 -- don't seem to work on Lunar Lake (generate illegal commands)
 #SIMD = -mavx512f -mavx512vl -mavx512bw -mavx512dq
 
 #
@@ -29,10 +28,10 @@ SIMD = -mavx2
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-#CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) -DNDEBUG
+#CPPFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
 #
 #	DEBUG:
-CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
+CPPFLAGS = -I$(INCDIR) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
 #
@@ -43,7 +42,7 @@ CPPFLAGS = $(INCLUDE) -std=c++11 -W -march=native -O2 -ffp-model=precise -ffp-co
 
 
 
-LDFLAGS = $(LIB) -lstdc++ -lm -lchaos
+LDFLAGS = -L$(LIBDIR) -lstdc++ -lm -lchaos
 
 
 
@@ -63,7 +62,7 @@ LDFLAGS = $(LIB) -lstdc++ -lm -lchaos
 
 
 chaos.o: chaos.h chaos.cpp
-	$(CC) $(CPPFLAGS) -c chaos.cpp -o $(OBJ)chaos.o
+	$(CC) $(CPPFLAGS) -c chaos.cpp -o $(OBJDIR)chaos.o
 
 
 
@@ -71,19 +70,19 @@ chaos.o: chaos.h chaos.cpp
 #	Create the (static) chaos library file
 #
 lib-chaos: chaos.o
-	ar crs $(BUILD)libchaos.a $(OBJ)chaos.o
+	ar crs $(BUILDDIR)libchaos.a $(OBJDIR)chaos.o
 
 #
 #	Create an executable file with tests for the chaos library
 #
 test-chaos:	lib-chaos test.cpp
-	$(CC) $(CPPFLAGS) -o $(TEST)test-chaos test.cpp $(LDFLAGS)
+	$(CC) $(CPPFLAGS) -o $(TESTDIR)test-chaos test.cpp $(LDFLAGS)
 
 #
 #	Run the tests
 #
 test:	test-chaos
-	$(TEST)test-chaos
+	$(TESTDIR)test-chaos
 
 clean:
-	rm -f $(BUILD)libchaos.a $(TEST)test-chaos $(OBJ)*
+	rm -f $(BUILDDIR)libchaos.a $(TESTDIR)test-chaos $(OBJDIR)*

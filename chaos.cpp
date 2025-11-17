@@ -101,6 +101,16 @@ uint64_t chs::mix64(uint64_t state) {
 
 
 //
+//	Convert uint64 into (0,1] fp64
+//	0 is avoided to be able to take logarithms for Exp-distributed random variables
+//
+static inline fp64_t chs::U01(uint64_t bits) {
+	return ldexp((fp64_t) bits, -64);
+}
+
+
+
+//
 //	128 bit hashing function:
 //	Takes <length> bytes from <data>
 //	and hashes it into the chs::RNG.state[0,1] (two qwords)
@@ -113,50 +123,82 @@ void chs::RNG::hash(const void* data, std::size_t length){
 	length >>= 3;								//	original length is in bytes, this one is in qwords (64 bits)
 	assert(!(uintptr_t(data) & 0b111));			//	Last 3 bits must be 0 for int64-aligned data
 	uint64_t* qw_data = (uint64_t*) data;		//	Convert <data> into uint64 pointer
-	int i = 0;									//	Currently updated entry of the <state>
+	int i = 0;									//	Currently updated qword of the first <state>
 
-	state[0] = 0;	state[1] = 0;				//	Reset the state...
-	cache = {NaN};								//	...and cache
-	index = 0;									//	Start with <state[0,1]>
+	i64[0] = 0;	i64[1] = 0;						//	Clear the bits of the 1st bit stream
+	activeStream = 0;	activeType = Void;		//	Re-initialize default values
 
-	
 	while (length > 0) {
-		state[i] ^= chs::mix64(*qw_data);		//	Mix current data chunk and merge it into the <state[i]> 
+		i64[i] ^= chs::mix64(*qw_data);			//	Mix current data chunk and merge it into the <state> 
 		i ^= 1;									//	0->1 and 1->0
 		//	Mix its mixture into the "other" state qword
 		//	NOTE: the constant here is ad hoc and not optimized in any way
-		state[i] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
+		i64[i] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
 		qw_data++; length--;
 	}
 
-	//	Generate three more states for SIMD processing using the jump function
-	for (i = 2; i < 8; i += 2) {
-		state[i] = state[i-2]; 
-		state[i+1] = state[i-1]; 
-		jump(&state[i]);
+	//	Generate the remaining bit streams for SIMD processing using the xoroshiro jump function
+	for (i = 2; i < 2 * chs::STREAM_NUM; i += 2) {
+		i64[i] = i64[i-2];						//	Should probably be auto-vectorized by clang...
+		i64[i+1] = i64[i-1]; 
+		jump(&i64[i]);
 	}
 }
 
 
 //
-//	Generate random 64 bits, increment the <index>
-//	Generate new state when index exceeds 3
+//	Generate new states for all streams
 //
-uint64_t chs::RNG::next(){
-	uint64_t result = state[index] + state[index+1];	//	xoroshiro128+ returns the sum of <state>'s 64 bits
-	index = (index + 2) & 0b111;						//	Increment the index mod 8: 8 -> 0
-	if (!index)											//	If index was reset to 0, generate 4 new RNG states
-		for (int i = 0; i < 8; i+=2) ::next(&state[i]);
-
-	return result;
+void chs::RNG::next(){
+	//	The state occupies two qwords, so multiply i by 2 (i<<1) to get the right address
+	for (int i = 0; i < chs::STREAM_NUM; i++) ::next(&i64[i<<1]);
 }
+
+//
+//		
+//
+void chs::RNG::next(Distribution type){
+	activeStream++;									//	Move to the next stream
+													//	Expect that activeStream < STREAM_NUM
+	if (__builtin_expect(activeStream == chs::STREAM_NUM, false)){
+		activeStream = 0;							//	Start from 0 again...
+		activeType = Void;							//	...and indicate that the cache is empty
+		next();										//	Generate new states
+	}
+
+	if (__builtin_expect(type != activeType, false))
+		generate(type);								//	Regenerate the cache if not the same type as before: done
+
+}
+
+//
+//	Currently regenerates the entire cache
+//	-- sufficient to only go from activeStream and on
+//
+void chs::RNG::generate(Distribution type){
+	switch (type) {
+		case UFP01: break;
+		case UInt64: for (int i = 0; i < chs::STREAM_NUM; i++) cui[i] = i64[i<<1] + i64[(i<<1) + 1]; break;
+		case Void: break;
+		default:;
+	}
+
+	activeType = type;								//	Update the type of the current distribution
+}
+
 
 
 //
 //	Generate random 64 bits (xoroshiro128+ algorithm)
 //
 uint64_t chs::RNG::int64(){
-	return next();
+	//	Check if cache contains UInt64 values
+	if (__builtin_expect(activeType != UInt64, false))
+		generate(UInt64);							//	If not, regenerate the cache
+
+	uint64_t result = cui[activeStream];			//	Value from the current stream
+	next(UInt64);									//	Move to next stream; generate new bits if needed
+	return result;
 }
 
 
@@ -172,7 +214,8 @@ uint64_t chs::RNG::int64(){
 //	already near values around 30 (or even earlier, depending on required precision)...
 //	
 fp64_t chs::RNG::U01(){
-	return 5.42101086242752217003726400434970855712890625e-20 * next();			//	2^(-64)
+	next(UInt64);
+	return 5.42101086242752217003726400434970855712890625e-20 * cui[activeStream];			//	2^(-64)
 }
 
 
@@ -180,7 +223,7 @@ fp64_t chs::RNG::U01(){
 //
 //	Genereate Uniform[1,2) fp64
 //	NOTE: 1 may be generated if next() produces 0; 2 can never be generated due to IEEE754 FP representation
-//	This generator has the same roundoff issues as the one above, however it will not generate 2,
+//	This generator has the same round-off issues as the one above, however it will not generate 2,
 //	thus -log(2.0-u12) will produce a quick exponential random variable without risk of NaN.
 //	
 fp64_t chs::RNG::U12(){
@@ -191,8 +234,9 @@ fp64_t chs::RNG::U12(){
 
 	//	Use the highest 52 bits for mantissa (shift them to the lowest 52 bits of i64)
 	//	Set the top 12 bits to 001111111111 which creates "+" sign and exponent 1023 (0 after bias)
-	result.i64 = (next() >> 12) | 0x3FF0000000000000U;
-	return result.f64;		//	Return the corresponding FP value
+	//	result.i64 = (next() >> 12) | 0x3FF0000000000000U;
+	//return result.f64;		//	Return the corresponding FP value
+	return 0.0;
 }
 
 
@@ -200,15 +244,19 @@ fp64_t chs::RNG::U12(){
 //	Genereate N(0,1) fp64 via Box-Muller algorithm
 //
 fp64_t chs::RNG::n01(){
-	if (cache.i64[0] != NaN) {				//	If some value is cached, return it... 
-		fp64_t result = cache.f64[0];
-		cache.i64[0] = NaN;					//	...and clear the cache
+	/*
+	if (cache.i64[CHAOS_FLAGS] & CHAOS_FLAG_GAUSS) {		//	If some value is cached, return it... 
+		fp64_t result = cache.f64[CHAOS_GAUSS];
+		cache.i64[CHAOS_FLAGS] &= ~CHAOS_FLAG_GAUSS	;		//	...and clear the cache
 		return result;
 	};
-	fp64_t phi = 2.0 * PI * U01();					//	angular part,
+	fp64_t phi = 2.0 * PI * U01();				//	angular part,
 	fp64_t z = sqrt(-2.0 * log(2.0 - U12()));	//	radial part; use 2-U12() to avoid 0
 	cache.f64[0] = z * cos(phi);				//	Store one...
+	cache.i64[CHAOS_FLAGS] |= CHAOS_FLAG_GAUSS;	//	Raise the flag that a Gaussian variable is stored
 	return z * sin(phi);						//	...return the other
+												*/
+	return 0.0;
 }
 
 
@@ -216,9 +264,10 @@ fp64_t chs::RNG::n01(){
 //	Genereate N(0,1) fp64 via rejection sampling algorithm in a circle
 //
 fp64_t chs::RNG::N01(){
-	if (cache.i64[0] != NaN) {				//	If some value is cached, return it... 
-		fp64_t result = cache.f64[0];
-		cache.i64[0] = NaN;					//	...and clear the cache
+	/*
+	if (cache.i64[CHAOS_GAUSS] != NaN) {		//	If some value is cached, return it... 
+		fp64_t result = cache.f64[CHAOS_GAUSS];
+		cache.i64[CHAOS_GAUSS] = NaN;			//	...and clear the cache
 		return result;
 	};
 
@@ -237,6 +286,8 @@ fp64_t chs::RNG::N01(){
 	cache.f64[0] = x * r;					//	Store one...
 	return y * r;							//	...return the other
 	//return E;
+	*/
+	return 0.0;
 }
 
 

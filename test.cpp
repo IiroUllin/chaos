@@ -84,6 +84,7 @@ int main() {
 	rng.hash(&time, sizeof(time));
 	std::cout << " [time: " << (sizeof(time) << 3) << "bit]\t->\t" << std::bitset<64>(rng.int64()) << "\n\n";
 
+
 	//
 	//	Some formatting specification:
 	//
@@ -91,8 +92,14 @@ int main() {
 	std::cout << std::fixed;
 
 
+	//	Output first few  UInt64 and U01 random numbers
+	std::cout << "### Some successive random numbers ###\n\nUInt64:\t\t";
+	for (int i = 0; i < 4; i++) std::cout << rng.int64() << " ";
+	std::cout << "\nUnif[0,1]:\t";
+	for (int i = 0; i < 4; i++) std::cout << rng.U01() << " ";
 
-	std::cout << "\n### Averaging over " << SAMPLE_NUM << " samples ###\n\n";
+
+	std::cout << "\n\n### Averaging over " << SAMPLE_NUM << " samples ###\n\n";
 
 
 	//	Array of random variable samplers and their names
@@ -110,7 +117,7 @@ int main() {
 
 	//
 	//	Iterate over samplers computing mean and variance
-	//i
+	//
 	for (auto sampler { std::begin(X) }; sampler != std::end(X); ++sampler){
 		result = benchMean(sampler->func);
 		std::cout << sampler->id << std::setprecision(width)
@@ -118,6 +125,13 @@ int main() {
 			<< "\tVariance: " << result.data[1] 
 			<< "\t\t" << std::setprecision(0) << result.time << "ms\n";
 	};
+	
+	//
+	//	FYI:
+	//	On my Lunar Lake 258V; -O2: 10,000,000 "return 0" samples with mean and variance computation take 28ms;
+	//	In debug mode: about 31ms.
+	//	So all extra time is presumably spent on the relevant RNG...
+	//
 
 
 
