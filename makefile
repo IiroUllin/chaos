@@ -1,26 +1,33 @@
 CC = clang
 
 
-#	Extra header files here
-INCDIR = /home/ibrahim/include/
 
-#	Build path 
-BUILDDIR = build/
 
-#	Test (executable) path
-TESTDIR = test/
+####	DIRECTORY STRUCTURE		####
 
-#	Object and temporary files
-OBJDIR = obj/
+#
+#	WARNING: DO NOT LEAVE ANY SPACES OR TABS BETWEEN THE MACRO AND # 
+#	THEY WILL BE INCLUDED IN THE MACRO ITSELF
+#	THIS MAY LEAD TO UNEXPECTED DISASTERS SUCH AS rm $(DIR)/*
+#	TRANSLATING INTO rm [something] /*
+#	
+SRCDIR = .#							Source directory; root OK for small projects
+BUILDDIR = build#					Build path: final output goes here
+TESTDIR = test#						Test (executable) files go here
+OBJDIR = obj#						Object and temporary files go here
+INCDIR = /home/ibrahim/include#		Extra header files here (not from this project)
+LIBDIR = $(BUILDDIR)#				Local libraries here (if needed)
 
-#	Library path (will look for lib-chaos here)
-LIBDIR = $(BUILDDIR)
+TARGET = $(SRCDIR)/chaos.h $(LIBDIR)/libchaos.a#	Main targets of the project
+TEST = $(TESTDIR)/test-chaos#		Test file executable
 
+
+####	COMPILER AND LINKER FLAGS		####
 
 #	AVX512 switches
 SIMD = -mavx2
 
-#	These enable AVX512 -- don't seem to work on Lunar Lake (generate illegal commands)
+#	These enable AVX512 -- don't work on Lunar Lake (generate illegal commands)
 #SIMD = -mavx512f -mavx512vl -mavx512bw -mavx512dq
 
 #
@@ -28,10 +35,10 @@ SIMD = -mavx2
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-#CPPFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
+#CFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
 #
 #	DEBUG:
-CPPFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
+CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
 #
@@ -46,43 +53,63 @@ LDFLAGS = -L$(LIBDIR) -lstdc++ -lm -lchaos
 
 
 
+####	BUILD RULES		####
+
+
 #
 #	.PHONY lists targets that are names of recipes rather than of output files
 #	
-.PHONY:	lib-chaos test clean
-	#	test: run the test suite
-	#	clean: clean all files except the source code
+.PHONY: test clean install
+#	test: run the test suite
+#	clean: clean all files except the source code
+
 
 #	By default the first target is default :)
-#	But we can set it explicitly
-.DEFAULT_GOAL := lib-chaos
+#	But we can set it exlicitly
+.DEFAULT_GOAL := install
 
 
+#
+#	GENERIC IMPLICIT RULES
+#
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	$(CC) $(CFLAGS) -c $^ -o $@
 
-
-
-chaos.o: chaos.h chaos.cpp
-	$(CC) $(CPPFLAGS) -c chaos.cpp -o $(OBJDIR)chaos.o
+$(BUILDDIR)/lib%.a: $(OBJDIR)/%.o
+	ar crs $@ $^
 
 
 
 #
-#	Create the (static) chaos library file
+#	EXPLICIT BUILD RULES
 #
-lib-chaos: chaos.o
-	ar crs $(BUILDDIR)libchaos.a $(OBJDIR)chaos.o
+
+
 
 #
 #	Create an executable file with tests for the chaos library
 #
-test-chaos:	lib-chaos test.cpp
-	$(CC) $(CPPFLAGS) -o $(TESTDIR)test-chaos test.cpp $(LDFLAGS)
+$(TEST): $(TARGET) test.cpp
+	$(CC) $(CFLAGS) -o $(TEST) test.cpp $(LDFLAGS)
 
 #
 #	Run the tests
 #
-test:	test-chaos
-	$(TESTDIR)test-chaos
+test: $(TEST)
+	$(TEST)
 
+#
+#	Copy header and library files to external directories
+#
+install: $(TARGET)
+	@echo "Updating (global) headers and libraries..."
+	rsync $(SRCDIR)/chaos.h ~/include/
+	rsync $(BUILDDIR)/libchaos.a ~/lib/
+
+#
+#	WARNING!!! THINK THRICE WHEN USING ANY WILDCARDS WITH rm -f
+#	ALWAYS DO A DRY RUN WITH ls [same arguments] FIRST!!!
+#	THEN DO rm -i [same arguments] JUST IN CASE!!!
+#
 clean:
-	rm -f $(BUILDDIR)libchaos.a $(TESTDIR)test-chaos $(OBJDIR)*
+	rm -f $(BUILDDIR)/* $(TESTDIR)/* $(OBJDIR)/*
