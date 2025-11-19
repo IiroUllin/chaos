@@ -1,11 +1,11 @@
 [
     {
-        "command": "cc -c -I/home/ibrahim/include/ -std=c++11 -W -O2 -mavx2 -DNDEBUG -o obj/chaos.o chaos.cpp",
+        "command": "cc -c -I/home/ibrahim/include -std=c++11 -W -O1 -ffinite-math-only -DNDEBUG -o obj/chaos.o chaos.cpp",
         "directory": "/home/ibrahim/code/chaos.cpp",
         "file": "/home/ibrahim/code/chaos.cpp/chaos.cpp"
     },
     {
-        "command": "cc -c -I/home/ibrahim/include/ -std=c++11 -W -O2 -mavx2 -DNDEBUG -o test/test-chaos test.cpp",
+        "command": "cc -c -I/home/ibrahim/include -std=c++11 -W -O1 -ffinite-math-only -DNDEBUG -o test/test-chaos test.cpp",
         "directory": "/home/ibrahim/code/chaos.cpp",
         "file": "/home/ibrahim/code/chaos.cpp/test.cpp"
     }

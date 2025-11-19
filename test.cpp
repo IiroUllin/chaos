@@ -3,6 +3,7 @@
 #include <cassert>
 #include <string>
 #include <vector>
+#include <random>		//	For benchmarking
 #include <time.h>
 #include <math.h>
 #include <cstdint>
@@ -84,6 +85,11 @@ int main() {
 	rng.hash(&time, sizeof(time));
 	std::cout << " [time: " << (sizeof(time) << 3) << "bit]\t->\t" << std::bitset<64>(rng.int64()) << "\n\n";
 
+	//	Initialize built-in routines for benchmarking purposes
+	srand(static_cast<unsigned int>(time.tv_sec));					//	C style RNG
+	std::random_device ranDev;										//	Default C++ std:: RNG
+	std::default_random_engine gen(ranDev());
+	std::uniform_real_distribution<double> distr(0.0, 1.0); 
 
 	//
 	//	Some formatting specification:
@@ -109,6 +115,8 @@ int main() {
 	};
 	//	There must be a more elegant way to do this...
 	std::vector <Sampler> X = {
+		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;},	.id = "rand() benchmark\t"},
+		{.func = [&](){return distr(gen);},		.id = "std:: benchmark\t\t"},
 		{.func = [&](){return rng.U01_lcg();},	.id = "LCG benchmark\t\t"},
 		{.func = [&](){return rng.U12();},		.id = "Unif[1,2)\t\t"},
 		{.func = [&](){return rng.U01();},		.id = "Unif[0,1]\t\t"},

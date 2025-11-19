@@ -109,7 +109,8 @@ uint64_t chs::mix64(uint64_t state) {
 //	0 is avoided to be able to take logarithms for Exp-distributed random variables
 //
 static inline fp64_t chs::U01(uint64_t bits) {
-	return ldexp((fp64_t) bits, -64);
+	return TWO_NEG_64 * static_cast<fp64_t>(bits);
+	//return ldexp((fp64_t) bits, -64);
 }
 
 
@@ -164,10 +165,11 @@ void chs::RNG::next(){
 		activeType = UInt64;						//	...default: random integers
 		//	Call xoroshiro's next() function for all streams
 		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2)
-			cui[i>>1] = ::next(&i64[i]);			//	Evolve the state and store UInt64 in the cache
+			cfp[i>>1] = chs::U01(::next(&i64[i]));
+			//cui[i>>1] = ::next(&i64[i]);			//	Evolve the state and store UInt64 in the cache
 	}
 
-	activeType = UInt64;
+	activeType = UFP01;//UInt64;
 
 	//if (__builtin_expect(type != activeType, false))
 	//	generate(type);								//	Regenerate the cache if not the same type as before: done
@@ -175,13 +177,15 @@ void chs::RNG::next(){
 }
 
 //
-//	Currently regenerates the entire cache
-//	-- sufficient to only go from activeStream on
+//	Regenerates the RNG cache starting from the block containing <activeStream>
 //
-void chs::RNG::generate(Distribution type){
+void chs::RNG::regenerate(Distribution type){
+	// __SIMD__ is log_2 of the number of qwords processed in parallel; defined in "generic.h"
+	int start = (activeStream >> __SIMD__) << __SIMD__;	//	Round to nearest SIMD qword block
+
 	switch (type) {
-		case UFP01: break;
-		case UInt64: for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) cui[i>>1] = i64[i] + i64[i + 1]; break;
+		case UFP01: for (int i = start; i < 2 * chs::STREAM_NUM; i += 2) cfp[i>>1] = chs::U01(i64[i] + i64[i + 1]); break;
+		case UInt64: for (int i = start; i < 2 * chs::STREAM_NUM; i += 2) cui[i>>1] = i64[i] + i64[i + 1]; break;
 		default:;
 	}
 
@@ -204,7 +208,7 @@ fp64_t chs::RNG::U01_lcg(){
 uint64_t chs::RNG::int64(){
 	//	Check if cache contains UInt64 values
 	if (__builtin_expect(activeType != UInt64, false))
-		generate(UInt64);							//	If not: regenerate the cache
+		regenerate(UInt64);							//	If not: regenerate the cache
 
 	uint64_t result = cui[activeStream];			//	Value from the current stream
 	next();											//	Move to next stream; generate new bits if needed
@@ -224,13 +228,19 @@ uint64_t chs::RNG::int64(){
 //	already near values around 30 (or even earlier, depending on required precision)...
 //	
 fp64_t chs::RNG::U01(){
-	//	Check if cache contains UInt64 values
-	if (__builtin_expect(activeType != UInt64, false))
-		generate(UInt64);							//	If not: regenerate the cache
+	//	Check if cache contains UFP01 values
+	if (__builtin_expect(activeType != UFP01, false))
+		regenerate(UFP01);							//	If not: regenerate the cache
 
-	uint64_t result = cui[activeStream];			//	Value from the current stream
+	fp64_t result = cfp[activeStream];				//	FP value from the current stream
 	next();											//	Move to next stream; generate new bits if needed
-	return 5.42101086242752217003726400434970855712890625e-20 * result;			//	2^(-64)
+	
+	//	Plain multiplication works much faster than ldexp()...
+	//	...perhaps it is vectorized in some way
+	return result;
+	//return chs::U01(result);
+	//return TWO_NEG_64 * result;						//	2^(-64); defined in "generic.h"
+	//return ldexp((fp64_t) result, -64);
 }
 
 
