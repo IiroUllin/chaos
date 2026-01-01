@@ -1,4 +1,4 @@
-#include "chaos.h"
+#include "chaos.hpp"
 #include <cmath>
 #include <cassert>		//	Assertions for debugging
 
@@ -47,7 +47,8 @@ static void jump(uint64_t* state) {
 	uint64_t s1 = 0;
 	for(int i = 0; i < 2; i++)
 		for(int b = 0; b < 64; b++) {
-			if (JUMP[i] & uint64_t(1) << b) {	//	...maybe makes this endianess-indifferent?
+			//	static_cast: otherwise 1 may be given smaller size container (e.g. 32 bit)
+			if (JUMP[i] & static_cast<uint64_t>(1) << b) {
 				s0 ^= state[0];
 				s1 ^= state[1];
 			}
@@ -62,7 +63,7 @@ static void jump(uint64_t* state) {
 //
 //	Just some LCG; not optimized
 //
-uint8_t chs::mix8(uint8_t state) {
+uint8_t chs::mix8(const uint8_t state) {
     return state * 97 + 111;
 }
 
@@ -70,7 +71,7 @@ uint8_t chs::mix8(uint8_t state) {
 //
 //	Just some LCG; not optimized
 //
-uint16_t chs::mix16(uint16_t state) {
+uint16_t chs::mix16(const uint16_t state) {
     return state * 4093 + 32719;
 }
 
@@ -105,12 +106,36 @@ uint64_t chs::mix64(uint64_t state) {
 
 
 //
-//	Convert uint64 into (0,1] fp64
-//	0 is avoided to be able to take logarithms for Exp-distributed random variables
-//
-static inline fp64_t chs::U01(uint64_t bits) {
-	return TWO_NEG_64 * static_cast<fp64_t>(bits);
-	//return ldexp((fp64_t) bits, -64);
+//	Convert uint64 into [0,1) fp64
+//	1.0 will never be generated;
+//	0.0 is only generated if all bits are 0
+//	The next smallest number would be 2^(-64) 
+//	and the largest, 1 - 2^(-52)
+//	
+static inline fp64_t chs::FP01(uint64_t bits) {
+	//	Return 0.0 if all bits are zeros
+	if (__builtin_expect((bits == 0), false)) return 0.0;
+
+	uint64_t shift = __builtin_clzll(bits);		//	Number of leading zeros; use the "long-long" version for 64 biti
+	union {										//	Union to contain result
+		uint64_t i64result;
+		fp64_t f64result;
+	};
+
+	if (__builtin_expect((shift < 12), true)){	//	Shift to the right,
+		i64result = bits >> (11 - shift);
+	}
+	else {										//	Shift to the left,
+		i64result = bits << (shift - 11);
+	}
+	//	Mantissa is in place now; leading 1 is in position 52
+ 	i64result &= 0x000FFFFFFFFFFFFFU;			//	Clear the exponent and sign (top 12) bits
+	i64result |= static_cast<uint64_t>(1022 - shift) << 52;
+	//	Here 1023 would correspond to <result> = 2^0 * 1.[mantissa]
+	//	Observe that <result> == 1.0 can never appear, because its FP representation is
+	//	<mantissa> == 0; <exponent> == 1023 -- but here <exponent> <= 1022
+
+	return f64result;
 }
 
 
@@ -162,107 +187,61 @@ void chs::RNG::next(){
 													//	Expect that activeStream < STREAM_NUM
 	if (__builtin_expect(activeStream == chs::STREAM_NUM, false)){
 		activeStream = 0;							//	Start from 0 again...
-		activeType = UInt64;						//	...default: random integers
 		//	Call xoroshiro's next() function for all streams
-		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2)
-			cfp[i>>1] = chs::U01(::next(&i64[i]));
-			//cui[i>>1] = ::next(&i64[i]);			//	Evolve the state and store UInt64 in the cache
+		//	Convert random uint64 into fp(0,1)...
+		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) f64[i>>1] = chs::FP01(::next(&i64[i]));
 	}
-
-	activeType = UFP01;//UInt64;
-
-	//if (__builtin_expect(type != activeType, false))
-	//	generate(type);								//	Regenerate the cache if not the same type as before: done
-
 }
 
-//
-//	Regenerates the RNG cache starting from the block containing <activeStream>
-//
-void chs::RNG::regenerate(Distribution type){
-	// __SIMD__ is log_2 of the number of qwords processed in parallel; defined in "generic.h"
-	int start = (activeStream >> __SIMD__) << __SIMD__;	//	Round to nearest SIMD qword block
 
-	switch (type) {
-		case UFP01: for (int i = start; i < 2 * chs::STREAM_NUM; i += 2) cfp[i>>1] = chs::U01(i64[i] + i64[i + 1]); break;
-		case UInt64: for (int i = start; i < 2 * chs::STREAM_NUM; i += 2) cui[i>>1] = i64[i] + i64[i + 1]; break;
-		default:;
-	}
-
-	activeType = type;								//	Update the type of the current distribution
-}
 
 
 //
 //	Knuth's MMIX RNG: LCG generator employing just i64[0]
-//	Use for testing and benchmarking purposes ONLY!
+//	Use for testing and benchmarking purposes only
 //
 fp64_t chs::RNG::U01_lcg(){
 	i64[0] = i64[0] * 6364136223846793005 + 1442695040888963407;
-	return ldexp((fp64_t) i64[0], -64);
+	return chs::FP01(i64[0]);
 }
 
 //
-//	Generate random 64 bits (xoroshiro128+ algorithm)
+//	Generate random 64 bits (uint64)...
 //
 uint64_t chs::RNG::int64(){
-	//	Check if cache contains UInt64 values
-	if (__builtin_expect(activeType != UInt64, false))
-		regenerate(UInt64);							//	If not: regenerate the cache
-
-	uint64_t result = cui[activeStream];			//	Value from the current stream
-	next();											//	Move to next stream; generate new bits if needed
+	int i = activeStream << 1;						//	states take x2 the space...
+	uint64_t result = i64[i] + i64[i+1];			//	get uint64 directly from the <state>
+	next();											//	Move to the next stream; generate new bits if needed
 	return result;
 }
-
-
-
 //
-//	Genereate a quick Uniform[0,1] fp64
-//	NOTE: 1.0 can still be generated due to roundoff errors, despite max(next(state))=2^64-1
-//	because of 2^(-53) machine precision.
-//	Additionally, even though FP near 0 are spaced finer than 2^(-52), 
-//	this remains the sampling precision, i.e., once the "bins" get close enough to this limit
-//	the quality of the uniform distribution near 0 will diminish.
-//	In particular, -log(u01) is a poor approximation to exponential distribution 
-//	already near values around 30 (or even earlier, depending on required precision)...
-//	
-fp64_t chs::RNG::U01(){
-	//	Check if cache contains UFP01 values
-	if (__builtin_expect(activeType != UFP01, false))
-		regenerate(UFP01);							//	If not: regenerate the cache
+//	...or an integer in [0...num-1]
+//
+uint64_t chs::RNG::int64(uint64_t num){
+	assert(num > 0);
+	//	A convoluted way to find the maximal number divisible by num, minus one:
+	uint64_t result, max = UINT64_MAX;
+	if (__builtin_popcountll(num) > 1)				//	If num is not a power of 2; use "long-long" version
+		max = UINT64_MAX - (UINT64_MAX % num) - 1;
 
-	fp64_t result = cfp[activeStream];				//	FP value from the current stream
-	next();											//	Move to next stream; generate new bits if needed
+	do {
+		int i = activeStream << 1;					//	states take x2 the space...
+		result = i64[i] + i64[i+1];					//	get uint64 directly from the <state>
+		next();										//	Move to the next stream; generate new bits if needed
+	} while (result > max);							//	Discard values greater than <max> to avoid bias
 	
-	//	Plain multiplication works much faster than ldexp()...
-	//	...perhaps it is vectorized in some way
-	return result;
-	//return chs::U01(result);
-	//return TWO_NEG_64 * result;						//	2^(-64); defined in "generic.h"
-	//return ldexp((fp64_t) result, -64);
+	return result % num;
 }
-
-
 
 //
-//	Genereate Uniform[1,2) fp64
-//	NOTE: 1 may be generated if next() produces 0; 2 can never be generated due to IEEE754 FP representation
-//	This generator has the same round-off issues as the one above, however it will not generate 2,
-//	thus -log(2.0-u12) will produce a quick exponential random variable without risk of NaN.
-//	
-fp64_t chs::RNG::U12(){
-	union {
-		uint64_t i64;
-		fp64_t f64;
-	} result;				//	Overlap int64 and fp64 values
-
-	//	Use the highest 52 bits for mantissa (shift them to the lowest 52 bits of i64)
-	//	Set the top 12 bits to 001111111111 which creates "+" sign and exponent 1023 (0 after bias)
-	//	result.i64 = (next() >> 12) | 0x3FF0000000000000U;
-	//return result.f64;		//	Return the corresponding FP value
-	return 0.0;
+//	Genereate a Uniform(0,1] fp64
+//
+fp64_t chs::RNG::U01(){
+	fp64_t result = f64[activeStream];				//	FP value from the current stream
+	next();											//	Move to the next stream; generate new bits if needed
+	return result;
 }
+
 
 
 //
@@ -289,10 +268,10 @@ fp64_t chs::RNG::n01(){
 //	Genereate N(0,1) fp64 via rejection sampling algorithm in a circle
 //
 fp64_t chs::RNG::N01(){
-	/*
-	if (cache.i64[CHAOS_GAUSS] != NaN) {		//	If some value is cached, return it... 
-		fp64_t result = cache.f64[CHAOS_GAUSS];
-		cache.i64[CHAOS_GAUSS] = NaN;			//	...and clear the cache
+	
+	if (icache != NaN) {					//	If some value is cached, return it... 
+		fp64_t result = cache;
+		icache = NaN;						//	...and clear the cache
 		return result;
 	};
 
@@ -308,12 +287,20 @@ fp64_t chs::RNG::N01(){
 	r = 1.0 / sqrt(r); x *= r; y *= r;		//	x and y now contain cosine and sine of a random angle in (0,2π)
 	r = sqrt(4.0 * log(r));					//	r is now the radial part of 2d N(0,1)
 
-	cache.f64[0] = x * r;					//	Store one...
+	cache = x * r;							//	Store one...
 	return y * r;							//	...return the other
-	//return E;
-	*/
-	return 0.0;
 }
 
 
+//
+//	Approximate N(0,1) fp64 via Binom(64,1/2) by
+//	adding the 64 random bits
+//
+fp64_t chs::RNG::qN01(){
+	//	Grab the number of 1 bits in the random i64, subtract the mean of 32
+	//	and normalize to get the correct variance.
+	//	Note that sqrt(variance) of Binom(64,1/2) is 4
+	return 0.25 * static_cast<fp64_t>(__builtin_popcountll(int64()) - 32);
+}
+	
 

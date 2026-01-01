@@ -18,7 +18,7 @@ OBJDIR = obj#						Object and temporary files go here
 INCDIR = /home/ibrahim/include#		Extra header files here (not from this project)
 LIBDIR = $(BUILDDIR)#				Local libraries here (if needed)
 
-TARGET = $(SRCDIR)/chaos.h $(LIBDIR)/libchaos.a#	Main targets of the project
+TARGET = $(SRCDIR)/chaos.hpp $(LIBDIR)/libchaos.a#	Main targets of the project
 TEST = $(TESTDIR)/test-chaos#		Test file executable
 
 
@@ -35,11 +35,11 @@ SIMD = -mavx2
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-CFLAGS = -I$(INCDIR) -std=c++11 -W -O3 -ffinite-math-only -DNDEBUG
+#CFLAGS = -I$(INCDIR) -std=c++11 -Wall -O2 -ffp-contract=on -DNDEBUG
 #CFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
 #
 #	DEBUG:
-#CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
+CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
 #
@@ -104,7 +104,7 @@ test: $(TEST)
 #
 install: $(TARGET)
 	@echo "Updating (global) headers and libraries..."
-	rsync $(SRCDIR)/chaos.h ~/include/
+	rsync $(SRCDIR)/chaos.hpp ~/include/
 	rsync $(BUILDDIR)/libchaos.a ~/lib/
 
 #

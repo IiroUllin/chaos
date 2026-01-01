@@ -10,7 +10,7 @@
 #include <bitset> 		//	For std::bitset
 #include <functional>	//	For lambda-functions
 
-#include "chaos.h"
+#include "chaos.hpp"
 
 //#define SAMPLE_NUM 16777216			//	Number of samples for calculations
 #define SAMPLE_NUM 10000000				//	Number of samples for calculations
@@ -115,13 +115,15 @@ int main() {
 	};
 	//	There must be a more elegant way to do this...
 	std::vector <Sampler> X = {
-		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;},	.id = "rand() benchmark\t"},
+		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;},		.id = "rand() benchmark\t"},
 		{.func = [&](){return distr(gen);},		.id = "std:: benchmark\t\t"},
 		{.func = [&](){return rng.U01_lcg();},	.id = "LCG benchmark\t\t"},
-		{.func = [&](){return rng.U12();},		.id = "Unif[1,2)\t\t"},
-		{.func = [&](){return rng.U01();},		.id = "Unif[0,1]\t\t"},
+		{.func = [&](){return rng.U01();},		.id = "Unif[0,1)\t\t"},
 		{.func = [&](){return rng.N01();},		.id = "N(0,1) (Rejection)\t"},
-		{.func = [&](){return rng.n01();},		.id = "N(0,1) (Box-Muller)\t"}
+		{.func = [&](){return rng.n01();},		.id = "N(0,1) (Box-Muller)\t"},
+		{.func = [&](){return rng.qN01();},		.id = "N(0,1) (Binom)\t\t"},
+		{.func = [&](){return trunc(rng.U01() * 7);},		.id = "{0...6} (truncated)\t"},
+		{.func = [&](){return rng.int64(7);},	.id = "{0...6} (rejection)\t"}
 	};
 
 	//
