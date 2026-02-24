@@ -116,7 +116,7 @@ static inline fp64_t chs::FP01(uint64_t bits) {
 	//	Return 0.0 if all bits are zeros
 	if (__builtin_expect((bits == 0), false)) return 0.0;
 
-	uint64_t shift = __builtin_clzll(bits);		//	Number of leading zeros; use the "long-long" version for 64 biti
+	int shift = __builtin_clzll(bits);			//	Number of leading zeros; use the "long-long" version for 64 bit
 	union {										//	Union to contain result
 		uint64_t i64result;
 		fp64_t f64result;
@@ -240,6 +240,58 @@ fp64_t chs::RNG::U01(){
 	fp64_t result = f64[activeStream];				//	FP value from the current stream
 	next();											//	Move to the next stream; generate new bits if needed
 	return result;
+}
+
+//
+//	Genereate an Exp(1) fp64
+//
+fp64_t chs::RNG::Exp1(){
+	fp64_t result = f64[activeStream];				//	FP value from the current stream
+	next();											//	Move to the next stream; generate new bits if needed
+	return -log(1.0 - result);						//	result may be 0.0: subtract from 1.0 to avoid NaN	
+}
+
+//
+//	Genereate an Exp(ln2) fp64
+//	WARNING: CHECK ENDIANNESS: CLEARING BITS WITHIN
+//
+fp64_t chs::RNG::Eln2(){
+	union {
+		uint64_t bits;
+		fp64_t X;									//	fp64 view of bits
+	};
+ 	bits = i64[activeStream];						//	i64 value from the current stream
+
+	int empty = 0;									//	Number of empty bits
+													//
+	while (__builtin_expect((bits == 0), false)) {
+		empty += 64;								//	The entire 64 bit chunk is 0
+		next();										//	Get another random 64 bits
+	};
+	
+	int empty2 = __builtin_clzll(bits);				//	Number of empty bits within current nonzero block
+	//assert(empty < 16);							//	To check how large empty blocks we get sometimes
+	
+	empty += empty2;								//	Total number of empty bits
+	//	empty should now be distributed as Geometric(1/2)
+
+	//	Use the remaining bits to create a U[0.5,1) random variable
+	bits <<= ++empty2;								//	Rotate out the leading 0 bits and the following 1
+	bits >>= 12;									//	Clear space for mantissa and sign
+	bits |= 0x3FE0000000000000U;					//	Set the exponent; the constant is 1022 << 52
+	//	At this point U should be U[0.5,1) random variable
+	//	It only has 64-empty2 significant bits, so with probability 1/2048, it won't fill all 52 bits of the significand
+	//	To improve accuracy, call next() and use the entire new 64 bit chunk
+
+	//	Now we could simply call...
+	//X = -log2(X);		
+	//assert ((X > 0.0) && (X <= 1.0));				//	Should be in (0,1]
+	//	...this would defeat the purpose of the entire routine, however, as we could have called -log2(F01(bits)) right away
+
+	X = 2.0/log(2) * atanh((1 - X) / (1 + X)); 
+	
+	next();											//	Move to the next stream; generate new bits if needed
+	return X + static_cast<fp64_t>(empty);	
 }
 
 

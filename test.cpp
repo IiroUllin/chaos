@@ -119,6 +119,8 @@ int main() {
 		{.func = [&](){return distr(gen);},		.id = "std:: benchmark\t\t"},
 		{.func = [&](){return rng.U01_lcg();},	.id = "LCG benchmark\t\t"},
 		{.func = [&](){return rng.U01();},		.id = "Unif[0,1)\t\t"},
+		{.func = [&](){return rng.Exp1();},		.id = "Exp(1)\t\t\t"},
+		{.func = [&](){return rng.Eln2();},		.id = "Exp(ln2)\t\t"},
 		{.func = [&](){return rng.N01();},		.id = "N(0,1) (Rejection)\t"},
 		{.func = [&](){return rng.n01();},		.id = "N(0,1) (Box-Muller)\t"},
 		{.func = [&](){return rng.qN01();},		.id = "N(0,1) (Binom)\t\t"},

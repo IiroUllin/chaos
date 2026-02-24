@@ -46,7 +46,7 @@ CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-
 #	-march=native enables all instruction sets available on the host machine
 #	-ffp-model=strict/fast/precise umbrella settings for FP optimizations
 #	-ffp-contract=on/off/fast fuse add multiply toggle
-#	-ffinite-math-only assume that NaN and Infinity never occur
+#	-ffinite-math-only assume that NaN and Infinity never occur; note that std::isnan() is assumed to return false in this case
 
 
 

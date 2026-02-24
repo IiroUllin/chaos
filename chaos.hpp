@@ -64,6 +64,8 @@ namespace chs {
 			uint64_t int64();				//	random 64 bits (uint64)
 			uint64_t int64(uint64_t num);	//	random integer in [0..num-1]
 			fp64_t U01();					//	Uniform[0,1)
+			fp64_t Exp1();					//	Exp(1)
+			fp64_t Eln2();					//	Exp(ln2)
 			fp64_t N01();					//	Gaussian with 0 mean and variance 1 via rejection sampling
 			fp64_t qN01();					//	Gaussian with 0 mean and variance 1 via Binom(64,1/2) approximation
 			fp64_t n01();					//	Another N(0,1) Gaussian via Box-Muller
