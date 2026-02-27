@@ -101,7 +101,7 @@ int main() {
 	//	Output first few  UInt64 and U01 random numbers
 	std::cout << "### Some successive random numbers ###\n\nUInt64:\t\t";
 	for (int i = 0; i < 4; i++) std::cout << rng.int64() << " ";
-	std::cout << "\nUnif[0,1]:\t";
+	std::cout << "\nUnif[0,1):\t";
 	for (int i = 0; i < 4; i++) std::cout << rng.U01() << " ";
 
 
@@ -119,17 +119,19 @@ int main() {
 		{.func = [&](){return distr(gen);},		.id = "std:: benchmark\t\t"},
 		{.func = [&](){return rng.U01_lcg();},	.id = "LCG benchmark\t\t"},
 		{.func = [&](){return rng.U01();},		.id = "Unif[0,1)\t\t"},
-		{.func = [&](){return rng.Exp1();},		.id = "Exp(1)\t\t\t"},
-		{.func = [&](){return rng.Eln2();},		.id = "Exp(ln2)\t\t"},
+		{.func = [&](){return rng.Exp1();},		.id = "Exp(1) (-ln(U01))\t"},
+		{.func = [&](){return rng.E1();},		.id = "Exp(1)\t\t\t"},
 		{.func = [&](){return rng.N01();},		.id = "N(0,1) (Rejection)\t"},
 		{.func = [&](){return rng.n01();},		.id = "N(0,1) (Box-Muller)\t"},
 		{.func = [&](){return rng.qN01();},		.id = "N(0,1) (Binom)\t\t"},
-		{.func = [&](){return trunc(rng.U01() * 7);},		.id = "{0...6} (truncated)\t"},
-		{.func = [&](){return rng.int64(7);},	.id = "{0...6} (rejection)\t"}
+		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6} (truncated)\t"},
+		{.func = [&](){return rng.int64(7);},	.id = "{0...6} (64 bit)\t"},
+		{.func = [&](){return rng.int32(7);},	.id = "{0...6} (32 bit)\t"}
 	};
 
+
 	//
-	//	Iterate over samplers computing mean and variance
+	//	Iterate over remaining samplers computing mean and variance
 	//
 	for (auto sampler { std::begin(X) }; sampler != std::end(X); ++sampler){
 		result = benchMean(sampler->func);
@@ -147,8 +149,7 @@ int main() {
 	//
 
 
-
-	std::cout << "\n\n";
+	std::cout << "\n";
 
 	return 0;
 }

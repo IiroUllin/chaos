@@ -35,11 +35,11 @@ SIMD = -mavx2
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-#CFLAGS = -I$(INCDIR) -std=c++11 -Wall -O2 -ffp-contract=on -DNDEBUG
+CFLAGS = -I$(INCDIR) -std=c++11 -Wall -O3 -ffp-contract=on $(SIMD) -DNDEBUG
 #CFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
 #
 #	DEBUG:
-CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
+#CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
 #

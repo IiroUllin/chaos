@@ -1,5 +1,4 @@
 #include "chaos.hpp"
-#include <cmath>
 #include <cassert>		//	Assertions for debugging
 
 
@@ -41,7 +40,7 @@ static inline uint64_t next(uint64_t* state) {
 //	xoroshiro128+ jump function, equivalent to 2^64 calls to next()
 //
 static void jump(uint64_t* state) {
-	static const uint64_t JUMP[] = {0xdf900294d8f554a5U, 0x170865df4b3201fcU};
+	static const uint64_t JUMP[] = {0xDF900294D8F554A5U, 0x170865DF4B3201FCU};
 
 	uint64_t s0 = 0;
 	uint64_t s1 = 0;
@@ -52,91 +51,13 @@ static void jump(uint64_t* state) {
 				s0 ^= state[0];
 				s1 ^= state[1];
 			}
-			::next(state);						//	Evolve the state
+			next(state);						//	Evolve the state
 		}
 
 	state[0] = s0;
 	state[1] = s1;
 }
 
-
-//
-//	Just some LCG; not optimized
-//
-uint8_t chs::mix8(const uint8_t state) {
-    return state * 97 + 111;
-}
-
-
-//
-//	Just some LCG; not optimized
-//
-uint16_t chs::mix16(const uint16_t state) {
-    return state * 4093 + 32719;
-}
-
-
-//
-//	Prospector, https://github.com/skeeto/hash-prospector
-//	Attribution: C. Wellon; public domain
-//	Check the link for even faster mixers with slightly higher bias
-//
-uint32_t chs::mix32(uint32_t state) {
-	state++;		//	Not needed, but prevents 0->0 and slightly improves mixing
-    state = (state ^ (state >> 17)) * 0xed5ad4bbU;
-    state = (state ^ (state >> 11)) * 0xac4c1b51U;
-    state = (state ^ (state >> 15)) * 0x31848babU;
-    return state ^ (state >> 14);
-}
-
-
-//
-//	SplitMix64 algorithm (used, e.g., in Java)
-//	Attribution: S. Vigna, 2015; public domain
-//
-uint64_t chs::mix64(uint64_t state) {
-	//	NOTE: when SplitMix64() is used as an RNG, 
-	//	the new <state> is the incremented value 
-	//	from the first line, not the returned value
-	state += 0x9e3779b97f4a7c15U;
-	state = (state ^ (state >> 30)) * 0xbf58476d1ce4e5b9U;
-	state = (state ^ (state >> 27)) * 0x94d049bb133111ebU;
-	return state ^ (state >> 31);
-}
-
-
-//
-//	Convert uint64 into [0,1) fp64
-//	1.0 will never be generated;
-//	0.0 is only generated if all bits are 0
-//	The next smallest number would be 2^(-64) 
-//	and the largest, 1 - 2^(-52)
-//	
-static inline fp64_t chs::FP01(uint64_t bits) {
-	//	Return 0.0 if all bits are zeros
-	if (__builtin_expect((bits == 0), false)) return 0.0;
-
-	int shift = __builtin_clzll(bits);			//	Number of leading zeros; use the "long-long" version for 64 bit
-	union {										//	Union to contain result
-		uint64_t i64result;
-		fp64_t f64result;
-	};
-
-	if (__builtin_expect((shift < 12), true)){	//	Shift to the right,
-		i64result = bits >> (11 - shift);
-	}
-	else {										//	Shift to the left,
-		i64result = bits << (shift - 11);
-	}
-	//	Mantissa is in place now; leading 1 is in position 52
- 	i64result &= 0x000FFFFFFFFFFFFFU;			//	Clear the exponent and sign (top 12) bits
-	i64result |= static_cast<uint64_t>(1022 - shift) << 52;
-	//	Here 1023 would correspond to <result> = 2^0 * 1.[mantissa]
-	//	Observe that <result> == 1.0 can never appear, because its FP representation is
-	//	<mantissa> == 0; <exponent> == 1023 -- but here <exponent> <= 1022
-
-	return f64result;
-}
 
 
 
@@ -173,7 +94,7 @@ void chs::RNG::hash(const void* data, std::size_t length){
 		jump(&i64[i]);
 	}
 
-	activeStream = chs::STREAM_NUM-1;			//	Now calling next() will make activeStream == 0,
+	activeStream = chs::STREAM_NUM - 2;			//	Now calling next() will make activeStream == 0,
 	next();										//	call xoroshiro on all hashed  bits, and generate UInt64 cache
 }
 
@@ -182,116 +103,126 @@ void chs::RNG::hash(const void* data, std::size_t length){
 //	Increment activeStream and generate new states for all streams
 //	once all current streams have been used. 
 //
-void chs::RNG::next(){
-	activeStream++;									//	Move to the next stream
-													//	Expect that activeStream < STREAM_NUM
-	if (__builtin_expect(activeStream == chs::STREAM_NUM, false)){
-		activeStream = 0;							//	Start from 0 again...
+inline void chs::RNG::next(){
+	activeStream += 2;							//	Move to the next bit stream; increment by two, because states are two qwords
+	if (__builtin_expect(activeStream == 2 * chs::STREAM_NUM, false)){	//	Expect that activeStream < 2 * STREAM_NUM
+		activeStream = 0;						//	Start from 0 again...
 		//	Call xoroshiro's next() function for all streams
 		//	Convert random uint64 into fp(0,1)...
-		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) f64[i>>1] = chs::FP01(::next(&i64[i]));
+		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) f64[i>>1] = FP01(::next(&i64[i]));
 	}
 }
 
 
 
 
-//
-//	Knuth's MMIX RNG: LCG generator employing just i64[0]
-//	Use for testing and benchmarking purposes only
-//
-fp64_t chs::RNG::U01_lcg(){
-	i64[0] = i64[0] * 6364136223846793005 + 1442695040888963407;
-	return chs::FP01(i64[0]);
-}
 
 //
-//	Generate random 64 bits (uint64)...
+//	Generate a 64 bit integer in {0...N-1}
+//	using Daniel Lemire's "Fast Random Integer Generation in an Interval" TOMACS v.29(1)...
 //
-uint64_t chs::RNG::int64(){
-	int i = activeStream << 1;						//	states take x2 the space...
-	uint64_t result = i64[i] + i64[i+1];			//	get uint64 directly from the <state>
-	next();											//	Move to the next stream; generate new bits if needed
-	return result;
-}
-//
-//	...or an integer in [0...num-1]
-//
-uint64_t chs::RNG::int64(uint64_t num){
-	assert(num > 0);
-	//	A convoluted way to find the maximal number divisible by num, minus one:
-	uint64_t result, max = UINT64_MAX;
-	if (__builtin_popcountll(num) > 1)				//	If num is not a power of 2; use "long-long" version
-		max = UINT64_MAX - (UINT64_MAX % num) - 1;
-
-	do {
-		int i = activeStream << 1;					//	states take x2 the space...
-		result = i64[i] + i64[i+1];					//	get uint64 directly from the <state>
-		next();										//	Move to the next stream; generate new bits if needed
-	} while (result > max);							//	Discard values greater than <max> to avoid bias
+uint64_t chs::RNG::int64(const uint64_t N){
+	uint128_t value = (uint128_t) int64() * N,					//	Use (intrinsic) 128 bit integer to hold the product 
+			  threshold = value & UINT64_MAX;					//	...mod 2^64
 	
-	return result % num;
+	if (__builtin_expect((threshold < N), false)){				//	Rejection sampling here
+		//	Explicitly casting to 64 bits to get the remainder -- could be faster on some CPUs
+		uint64_t bias = static_cast<uint64_t>(-N) % N;			//	-N = 2^64-N (mod 2^64) -- gets into uint64_t range
+		while (__builtin_expect((threshold < bias), false)){	//	Biased values are in the range [0,bias)
+			value = (uint128_t) int64() * N;
+			threshold = value & UINT64_MAX;
+		}
+	};
+
+	return static_cast<uint64_t>(value >> 64);					//	Return top 64 bits which should be uniform in [0,N)
 }
 
+
 //
-//	Genereate a Uniform(0,1] fp64
+//	Generate a 32 bit integer in {0...N-1}
+//	This version could be slightly faster due to 64 bit multiplication
 //
-fp64_t chs::RNG::U01(){
-	fp64_t result = f64[activeStream];				//	FP value from the current stream
-	next();											//	Move to the next stream; generate new bits if needed
-	return result;
+uint32_t chs::RNG::int32(const uint32_t N){
+	uint64_t value = ((int64() >> 32) * N),						//	Use top 32 bits (higher RNG quality), multiply by N, 
+			 threshold = value & UINT32_MAX;					//	...mod 2^32	
+	
+	if (__builtin_expect((threshold < N), false)){				//	Rejection sampling here
+		//	Explicitly casting to 32 bits to get the remainder -- could be faster on some CPUs
+		uint64_t bias = static_cast<uint32_t>(-N) % N;			//	2^32-N = -N (mod 2^32)
+		while (__builtin_expect((threshold < bias), false)){	//	Biased values are in the range [0,bias)
+			value = ((int64() >> 32) * N);
+			threshold = value & UINT32_MAX;
+		}
+	};
+
+	return static_cast<uint32_t>(value >> 32);					//	Return top 32 bits which should be uniform in [0,N)
 }
+
+
+
 
 //
 //	Genereate an Exp(1) fp64
 //
-fp64_t chs::RNG::Exp1(){
-	fp64_t result = f64[activeStream];				//	FP value from the current stream
-	next();											//	Move to the next stream; generate new bits if needed
-	return -log(1.0 - result);						//	result may be 0.0: subtract from 1.0 to avoid NaN	
-}
-
-//
-//	Genereate an Exp(ln2) fp64
-//	WARNING: CHECK ENDIANNESS: CLEARING BITS WITHIN
-//
-fp64_t chs::RNG::Eln2(){
+fp64_t chs::RNG::E1(){
 	union {
 		uint64_t bits;
 		fp64_t X;									//	fp64 view of bits
 	};
- 	bits = i64[activeStream];						//	i64 value from the current stream
+ 	bits = int64();									//	i64 value from the current stream
 
 	int empty = 0;									//	Number of empty bits
-													//
+
 	while (__builtin_expect((bits == 0), false)) {
 		empty += 64;								//	The entire 64 bit chunk is 0
-		next();										//	Get another random 64 bits
+		bits = int64();								//	Get another random 64 bits
 	};
 	
-	int empty2 = __builtin_clzll(bits);				//	Number of empty bits within current nonzero block
+	int empty2 = __builtin_clzll(bits);				//	Number of starting 0 bits within current nonzero block
 	//assert(empty < 16);							//	To check how large empty blocks we get sometimes
 	
-	empty += empty2;								//	Total number of empty bits
+	empty += empty2;								//	Total number of 0 bits
 	//	empty should now be distributed as Geometric(1/2)
 
 	//	Use the remaining bits to create a U[0.5,1) random variable
 	bits <<= ++empty2;								//	Rotate out the leading 0 bits and the following 1
 	bits >>= 12;									//	Clear space for mantissa and sign
 	bits |= 0x3FE0000000000000U;					//	Set the exponent; the constant is 1022 << 52
-	//	At this point U should be U[0.5,1) random variable
+	
+	assert ((X >= 0.5) && (X < 1.0));				//	At this point X should be U[0.5,1) random variable
 	//	It only has 64-empty2 significant bits, so with probability 1/2048, it won't fill all 52 bits of the significand
 	//	To improve accuracy, call next() and use the entire new 64 bit chunk
 
-	//	Now we could simply call...
-	//X = -log2(X);		
-	//assert ((X > 0.0) && (X <= 1.0));				//	Should be in (0,1]
-	//	...this would defeat the purpose of the entire routine, however, as we could have called -log2(F01(bits)) right away
+	//	Now we could...
+	//return log(X) + LN2 * static_cast<fp64_t>(empty)
+	//	...this would defeat the purpose of this method, however, as we could have called -log2(F01(bits)) * log(2) right away
+	//	part of the speed up comes from optimizing the log() function, as we don't have to deal with NaNs and all that 
 
-	X = 2.0/log(2) * atanh((1 - X) / (1 + X)); 
+	fp64_t Y = (X - 1.0) / (X + 1.0),
+		   Z = Y * Y,
+		   //
+		   //	This approximation min/max-es the error using the Remez algorithm, as AI claims
+		   //	however the number ratios are pretty much the same as for regular Pade,
+		   //	so I am not sure that there is any improvement: need to double check myself...
+		   P = 2.0 - Z * (2.564101905828859341 - Z * (0.791195655518972807 - Z * 0.034091605553198947)),
+		   Q = -1.0 + Z * (1.615383344686411516 - Z * (0.734261765415777174 - Z * 0.083262657310573967));
+		   //
+		   //	This is Pade order [7/6]
+		   //P = -30030 + Z * (38500 - Z * (11886 - Z * 512)),
+		   //Q = 15015 - Z * (24255 - Z * (11025 - Z * 1225));
+		   //
+		   //	This is Pade order [5/4]
+		   //P = -1890 + Z * (1470 - Z * 128),
+		   //Q = 945 - Z * (1050 - Z * 225);
+		   //
+		   //	This is Pade order [3/2]
+		   //P = -30 + 8 * Z,
+		   //Q = 15 - 9 * Z;
 	
-	next();											//	Move to the next stream; generate new bits if needed
-	return X + static_cast<fp64_t>(empty);	
+
+		
+	return Y * P / Q + LN2 * static_cast<fp64_t>(empty);	//	Rescale to Exp(1)	
+	//return Y * P / Q + static_cast<fp64_t>(empty);	
 }
 
 
@@ -317,7 +248,7 @@ fp64_t chs::RNG::n01(){
 
 
 //
-//	Genereate N(0,1) fp64 via rejection sampling algorithm in a circle
+//	Generate N(0,1) fp64 via rejection sampling algorithm in a circle
 //
 fp64_t chs::RNG::N01(){
 	
