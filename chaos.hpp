@@ -78,13 +78,14 @@ namespace chs {
 				next();							//	Move to the next stream; generate new bits if needed
 				return result;
 			};
-			fp64_t U(fp64_t a, fp64_t b){		//	Uniform[a,b)
-				return a + (b - a) * U01();
-			}
+
 
 			//
 			//	Various distributions
 			//
+			fp64_t		U(fp64_t a, fp64_t b){		//	Uniform[a,b)
+				return a + (b - a) * U01();
+			}
 			uint64_t	int64(const uint64_t N);	//	random 64 bit integer in [0..N-1]
 			uint32_t	int32(const uint32_t N);	//	random 32 bit integer in [0..N-1] -- slightly faster than int64()
 			fp64_t		E1();						//	Exp(1)

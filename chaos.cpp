@@ -2,7 +2,7 @@
 #include <cassert>		//	Assertions for debugging
 
 
-#include "zt_exp.hpp"	//	Ziggurat table for Exp() variable generator
+#include "ziggurat/zt_exp.hpp"	//	Ziggurat table for Exp() variable generator
 
 
 /*----------------------------------------------------------------------------------+
