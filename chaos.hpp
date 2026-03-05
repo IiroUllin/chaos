@@ -78,6 +78,9 @@ namespace chs {
 				next();							//	Move to the next stream; generate new bits if needed
 				return result;
 			};
+			fp64_t U(fp64_t a, fp64_t b){		//	Uniform[a,b)
+				return a + (b - a) * U01();
+			}
 
 			//
 			//	Various distributions
@@ -85,6 +88,7 @@ namespace chs {
 			uint64_t	int64(const uint64_t N);	//	random 64 bit integer in [0..N-1]
 			uint32_t	int32(const uint32_t N);	//	random 32 bit integer in [0..N-1] -- slightly faster than int64()
 			fp64_t		E1();						//	Exp(1)
+			fp64_t		Ez();						//	Exp(1) with ziggurat
 			fp64_t		N01();						//	Gaussian with 0 mean and variance 1 via rejection sampling
 			fp64_t		n01();						//	Another N(0,1) Gaussian via Box-Muller
 
@@ -140,8 +144,15 @@ namespace chs {
 		return state * 97 + 111;
 	}
 
-	inline uint16_t mix16(const uint16_t state) {		//	Random stuff: not optimized
-		return state * 4093 + 32719;
+
+	//
+	//	One of C. Wellon's mixers (-Imn6); see below for the link
+	//
+	inline uint16_t mix16(uint16_t state) {
+    	state += state << 7; state ^= state >> 8;
+    	state += state << 3; state ^= state >> 2;
+    	state += state << 4; 
+    	return state ^ (state >> 8);
 	}
 
 

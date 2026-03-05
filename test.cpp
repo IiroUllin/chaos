@@ -119,14 +119,15 @@ int main() {
 		{.func = [&](){return distr(gen);},		.id = "std:: benchmark\t\t"},
 		{.func = [&](){return rng.U01_lcg();},	.id = "LCG benchmark\t\t"},
 		{.func = [&](){return rng.U01();},		.id = "Unif[0,1)\t\t"},
-		{.func = [&](){return rng.Exp1();},		.id = "Exp(1) (-ln(U01))\t"},
+		{.func = [&](){return rng.Exp1();},		.id = "Exp(1) [-ln(U01)]\t"},
 		{.func = [&](){return rng.E1();},		.id = "Exp(1)\t\t\t"},
-		{.func = [&](){return rng.N01();},		.id = "N(0,1) (Rejection)\t"},
-		{.func = [&](){return rng.n01();},		.id = "N(0,1) (Box-Muller)\t"},
-		{.func = [&](){return rng.qN01();},		.id = "N(0,1) (Binom)\t\t"},
-		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6} (truncated)\t"},
-		{.func = [&](){return rng.int64(7);},	.id = "{0...6} (64 bit)\t"},
-		{.func = [&](){return rng.int32(7);},	.id = "{0...6} (32 bit)\t"}
+		{.func = [&](){return rng.Ez();},		.id = "Exp(1) [ziggurat]\t"},
+		{.func = [&](){return rng.N01();},		.id = "N(0,1) [rejection]\t"},
+		{.func = [&](){return rng.n01();},		.id = "N(0,1) [Box-Muller]\t"},
+		{.func = [&](){return rng.qN01();},		.id = "N(0,1) [binom]\t\t"},
+		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6} [truncated]\t"},
+		{.func = [&](){return rng.int64(7);},	.id = "{0...6} [64 bit]\t"},
+		{.func = [&](){return rng.int32(7);},	.id = "{0...6} [32 bit]\t"}
 	};
 
 

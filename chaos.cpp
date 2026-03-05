@@ -2,6 +2,7 @@
 #include <cassert>		//	Assertions for debugging
 
 
+#include "zt_exp.hpp"	//	Ziggurat table for Exp() variable generator
 
 
 /*----------------------------------------------------------------------------------+
@@ -119,7 +120,7 @@ inline void chs::RNG::next(){
 
 //
 //	Generate a 64 bit integer in {0...N-1}
-//	using Daniel Lemire's "Fast Random Integer Generation in an Interval" TOMACS v.29(1)...
+//	using Daniel Lemire's "Fast Random Integer Generation in an Interval" TOMACS v.29(1); 2019
 //
 uint64_t chs::RNG::int64(const uint64_t N){
 	uint128_t value = (uint128_t) int64() * N,					//	Use (intrinsic) 128 bit integer to hold the product 
@@ -159,6 +160,36 @@ uint32_t chs::RNG::int32(const uint32_t N){
 }
 
 
+
+//
+//	Genereate an Exp(1) fp64 using ziggurat method
+//
+fp64_t chs::RNG::Ez(){
+	const int s2 = __ZT_EXP_LL2;						//	log2(<Table Size>)
+	const int last = (1 << s2) - 1;						//	Index of the last element of the ziggurat table
+
+	for(;;) {											//	Infinite loop; break when a value is returned
+		uint64_t bits = int64();						//	Get i64 value from the bit stream
+
+		int i = (bits >> (64-s2));						//	Take the top s2 bits as layer index (32 ziggurat layers at the moment)
+
+		bits <<= s2;									//	Rotate the rest to the top
+		fp64_t X = FP01(bits);							//	Convert them to [0,1) FP
+
+		if (__builtin_expect((i == 0), false)) {		//	The irreggular (bottom) layer
+			if (X <= __ZT_EXP_P)						//	Use X to check rectangular vs exponential part
+				return __ZT_EXP_X[last] * U01();		//	Uniform in the rectangular part
+			else return __ZT_EXP_X[last] + E1();		//	Exponential + shift otherwise
+		} else {
+			X *= __ZT_EXP_X[i];							//	Stretch X to [0, __ZT_EXP[i]]
+			//	Accept if it is smaller than the previous margin
+			if (__builtin_expect(X <= __ZT_EXP_X[i-1], true)) return X;
+			//	If not, generate a random Y-value in the rectangle and check if (X,Y) is under the PDF graph
+			fp64_t Y = U(__ZT_EXP_Y[i], __ZT_EXP_Y[i-1]);
+			if (Y <= exp(-X)) return X;					//	Accept if under the curve
+		}
+	}
+}
 
 
 //
@@ -229,26 +260,26 @@ fp64_t chs::RNG::E1(){
 
 //
 //	Genereate N(0,1) fp64 via Box-Muller algorithm
+//	"A Note on the Generation of Random Normal Deviates". AMS. 29 (2); 1958
 //
 fp64_t chs::RNG::n01(){
-	/*
-	if (cache.i64[CHAOS_FLAGS] & CHAOS_FLAG_GAUSS) {		//	If some value is cached, return it... 
-		fp64_t result = cache.f64[CHAOS_GAUSS];
-		cache.i64[CHAOS_FLAGS] &= ~CHAOS_FLAG_GAUSS	;		//	...and clear the cache
+
+	if (icache != NaN) {						//	If some value is cached, return it... 
+		fp64_t result = cache;
+		icache = NaN;							//	...and clear the cache
 		return result;
 	};
+
 	fp64_t phi = 2.0 * PI * U01();				//	angular part,
-	fp64_t z = sqrt(-2.0 * log(2.0 - U12()));	//	radial part; use 2-U12() to avoid 0
-	cache.f64[0] = z * cos(phi);				//	Store one...
-	cache.i64[CHAOS_FLAGS] |= CHAOS_FLAG_GAUSS;	//	Raise the flag that a Gaussian variable is stored
+	fp64_t z = sqrt(2.0 * E1());				//	radial part: generate Exp(1) random variable
+	cache = z * cos(phi);						//	Store one...
 	return z * sin(phi);						//	...return the other
-												*/
-	return 0.0;
 }
 
 
 //
 //	Generate N(0,1) fp64 via rejection sampling algorithm in a circle
+//	Due to Marsaglia & Bray, "A Convenient Method for Generating Normal Variables". SIAM Rev. 6 (3): 260–264; 1964
 //
 fp64_t chs::RNG::N01(){
 	
@@ -265,7 +296,7 @@ fp64_t chs::RNG::N01(){
 		r = x * x + y * y;
 	} while ((r == 0.0) || (r > 1.0));
 
-	//	(x, y) is now uniform in the unit circle; r ~ U(0,1); -log(r) ~ Exp(1)				
+	//	(x, y) is now uniform in the unit circle; r ~ U(0,1); -ln(r) ~ Exp(1)				
 
 	r = 1.0 / sqrt(r); x *= r; y *= r;		//	x and y now contain cosine and sine of a random angle in (0,2π)
 	r = sqrt(4.0 * log(r));					//	r is now the radial part of 2d N(0,1)
