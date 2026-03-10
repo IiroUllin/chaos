@@ -15,6 +15,7 @@
 
 #include <cstdint>					//	Fixed-width integers; requires C++11
 #include <cmath>					//	Math functions
+#include <functional>				//	For lambda-functions in ziggurat tail
 #include "generic.hpp"				//	Generic definitions and useful functions
 
 
@@ -34,7 +35,21 @@ namespace chs {
 
 
 	constexpr int STREAM_NUM = 4;						//	Maximal number of bit streams for SIMD processing; should be a power of 2
-
+	constexpr int ZIG_SIZE_L2 = 9;						//	log2 of the size of ziggurat tables; currently fixed, as all...
+	constexpr int ZIG_SIZE = 1 << ZIG_SIZE_L2;			//	...tables are packed into the same data structure type (below).
+	
+	//
+	//	Data structure for ziggurat tables
+	//
+	typedef fp64_t (*PDF)(fp64_t);				//	Function pointer type for PDF calls; const implies PDF does not modify its host 
+	struct ZigguratTable {
+		fp64_t P;								//	Probability to accept rectangular sub-block i9n the irregular (bottom) layer
+		bool exp;								//	True if no additional comparison is required, e.g., for Exp() distribution
+		bool sym;								//	If true, symmetrize the distribution
+		PDF pdf;								//	PDF of the distribution
+		fp64_t X[ZIG_SIZE];						//	Table of X values
+		fp64_t Y[ZIG_SIZE];						//	Table of Y values
+	};
 
 
 	//
@@ -55,7 +70,11 @@ namespace chs {
 
 			//	Advance to the next bit stream;
 			//	generate new states in all bit streams and cache f64[] when needed
-			void next();
+			void			next();
+
+			//	General ziggurat algorithm with exponential tail
+			//	This implementation may be about 5-10% slower than distribution-specific due to algorithmic overheads.
+			fp64_t			zig(const ZigguratTable &zt);
 
 		public:
 			//
@@ -83,15 +102,20 @@ namespace chs {
 			//
 			//	Various distributions
 			//
-			fp64_t		U(fp64_t a, fp64_t b){		//	Uniform[a,b)
+			fp64_t		U(const fp64_t a, const fp64_t b){	//	Uniform[a,b)
 				return a + (b - a) * U01();
 			}
-			uint64_t	int64(const uint64_t N);	//	random 64 bit integer in [0..N-1]
-			uint32_t	int32(const uint32_t N);	//	random 32 bit integer in [0..N-1] -- slightly faster than int64()
-			fp64_t		E1();						//	Exp(1)
-			fp64_t		Ez();						//	Exp(1) with ziggurat
-			fp64_t		N01();						//	Gaussian with 0 mean and variance 1 via rejection sampling
-			fp64_t		n01();						//	Another N(0,1) Gaussian via Box-Muller
+			uint64_t	int64(const uint64_t N);			//	random 64 bit integer in [0..N-1]
+			uint32_t	int32(const uint32_t N);			//	random 32 bit integer in [0..N-1] -- slightly faster than int64()
+			fp64_t		E();								//	Exp(1) via ziggurat
+			fp64_t		Ez();								//	Exp(1) via general ziggurat
+			fp64_t		E1();								//	Exp(1) via ln(∙) approximation
+			fp64_t		E(const fp64_t a) {					//	Exp(a)
+				return a * E();
+			}
+			fp64_t		N01();								//	Gaussian with 0 mean and variance 1 via rejection sampling
+			fp64_t		n01();								//	Another N(0,1) Gaussian via Box-Muller
+			fp64_t		Nz();								//	N(0,1) Gaussian via ziggurat
 
 
 			//

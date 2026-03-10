@@ -1,8 +1,13 @@
 #include "chaos.hpp"
-#include <cassert>		//	Assertions for debugging
+#include <cassert>					//	Assertions for debugging
 
 
-#include "ziggurat/zt_exp.hpp"	//	Ziggurat table for Exp() variable generator
+#include <iostream>					//	For debugging
+
+
+#include "ziggurat/zt_exp_old.hpp"	//	Ziggurat table for Exp(1) generator
+#include "ziggurat/zt_exp.hpp"		//	Ziggurat table for Exp(1) generator
+#include "ziggurat/zt_gauss.hpp"	//	Ziggurat table for N(0,1) generator
 
 
 /*----------------------------------------------------------------------------------+
@@ -58,7 +63,6 @@ static void jump(uint64_t* state) {
 	state[0] = s0;
 	state[1] = s1;
 }
-
 
 
 
@@ -160,11 +164,77 @@ uint32_t chs::RNG::int32(const uint32_t N){
 }
 
 
+//
+//	General ziggurat method with exponential sampling for the irregular (bottom) piece; based on...
+//	Marsaglia, Tsang; "The Ziggurat Method for Generating Random Variables" J.Stat.Soft. 5(8), 2002
+//
+fp64_t chs::RNG::zig(const ZigguratTable &zt) {
+	const int last = ZIG_SIZE - 1;						//	Index of the last element of the ziggurat table
+	union {
+		fp64_t X;
+		uint64_t bits;
+	};													//	Access to bits of X to flip sign if needed
+	fp64_t Y;											//	(X,Y) will be the generated point under the PDF
+	uint64_t sign_base = static_cast<uint64_t>(zt.sym) << 63,		//	The sign bit is 1 if the distribution is symmetric
+			 sign;										//	This one will be updated depending on RNG	
+
+	for(;;) {											//	Infinite loop; break when a value is returned
+		uint64_t bits = int64();						//	Get i64 value from the bit stream
+
+		sign = sign_base & bits;						//	Use the top bit for the sign...
+		bits <<= 1;										//	...and discard it
+
+		int i = (bits >> (64-ZIG_SIZE_L2));				//	Take the next size_l2 bits as layer index
+		bits <<= ZIG_SIZE_L2;							//	Rotate the rest to the top
+		X = FP01(bits);									//	Convert them to [0,1) FP
+
+		if (__builtin_expect(i == 0, false)) {			//	The irreggular (bottom) layer
+			if (__builtin_expect(X <= zt.P, true)) {	//	Use X to check rectangular vs exponential part
+				X = zt.X[last] * U01();					//	Uniform in the rectangular part
+				break;
+			}
+			X = E1();									//	Generate an exponential random variable
+			if (zt.exp) { 
+				X += zt.X[last];						//	Shift and return it: Y-comparison is not required
+				break;
+			}
+			Y = zt.Y[last] * exp (-X) * U01();			//	Generate a random Y coordinate under the exponential curve
+			X += zt.X[last];
+		} else {
+			X *= zt.X[i];								//	Stretch X to [0, X[i]]
+			//	Accept if it is smaller than the previous margin
+			if (__builtin_expect(X <= zt.X[i-1], true)) break;
+			//	If not, generate a random Y-value in the rectangle and check if (X,Y) is under the PDF graph
+			Y = U(zt.Y[i], zt.Y[i-1]);
+		}
+	//	if (Y <= exp(-0.5*X*X)) break;						//	Accept X if (X,Y) is under the graph of the PDF
+		if (Y <= zt.pdf(X)) break;						//	Accept X if (X,Y) is under the graph of the PDF
+		//	If we have not returned by now, the sample is rejected: restart from the top...
+	}
+	bits ^= sign;										//	Flip the sign of X if <sign> is set
+	return X;
+}
+
+
 
 //
-//	Genereate an Exp(1) fp64 using ziggurat method
+//	Genereate N(0,1) fp64 using general ziggurat method
 //
-fp64_t chs::RNG::Ez(){
+fp64_t chs::RNG::Nz() {
+	return zig(ZT_GAUSS);
+}
+
+//
+//	Genereate Exp(1) fp64 using general ziggurat method
+//
+fp64_t chs::RNG::Ez() {
+	return zig(ZT_EXP);
+}
+
+//
+//	Genereate Exp(1) fp64 using ziggurat method
+//
+fp64_t chs::RNG::E(){
 	const int s2 = __ZT_EXP_LL2;						//	log2(<Table Size>)
 	const int last = (1 << s2) - 1;						//	Index of the last element of the ziggurat table
 
@@ -176,12 +246,12 @@ fp64_t chs::RNG::Ez(){
 		bits <<= s2;									//	Rotate the rest to the top
 		fp64_t X = FP01(bits);							//	Convert them to [0,1) FP
 
-		if (__builtin_expect((i == 0), false)) {		//	The irreggular (bottom) layer
-			if (X <= __ZT_EXP_P)						//	Use X to check rectangular vs exponential part
+		if (__builtin_expect(i == 0, false)) {			//	The irreggular (bottom) layer
+			if (__builtin_expect(X <= __ZT_EXP_P, true))//	Use X to check rectangular vs exponential part
 				return __ZT_EXP_X[last] * U01();		//	Uniform in the rectangular part
-			else return __ZT_EXP_X[last] + E1();		//	Exponential + shift otherwise
+			return __ZT_EXP_X[last] + E1();				//	Exponential + shift otherwise
 		} else {
-			X *= __ZT_EXP_X[i];							//	Stretch X to [0, __ZT_EXP[i]]
+			X *= __ZT_EXP_X[i];							//	Stretch X to [0, __ZT_EXP_X[i]]
 			//	Accept if it is smaller than the previous margin
 			if (__builtin_expect(X <= __ZT_EXP_X[i-1], true)) return X;
 			//	If not, generate a random Y-value in the rectangle and check if (X,Y) is under the PDF graph
@@ -193,7 +263,7 @@ fp64_t chs::RNG::Ez(){
 
 
 //
-//	Genereate an Exp(1) fp64
+//	Genereate Exp(1) fp64 using log2-approximation method
 //
 fp64_t chs::RNG::E1(){
 	union {
