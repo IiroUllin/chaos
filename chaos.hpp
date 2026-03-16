@@ -15,11 +15,29 @@
 
 #include <cstdint>					//	Fixed-width integers; requires C++11
 #include <cmath>					//	Math functions
-#include <functional>				//	For lambda-functions in ziggurat tail
 #include "generic.hpp"				//	Generic definitions and useful functions
 
 
 
+//
+//	The purpose of this library is to provide fast and statistically accurate samplers for common distributions.
+//	We aim for about 2^46 "good" samples. At the moment (2026), a CPU core generates 2^25 to 2^30 samples per second
+//	for nontrivial cases. Thus 2^46 samples would amount to between a dozen and a hundred hours of computation.
+//	The typical error due to sampling variance would be ≥ 2^-23 ≃ 1.2e-7 -- single precision machine eps.
+//
+//	NOTE: the expected max. value of n iid N(0,1) samples is about sqrt(2ln(n)); variance ≃1/ln(n).
+//	For 2^46 samples, this impies that large values close to 8 are likely to appear, so we should make that possible.
+//	Similarly, for Exp(1) random variable we are likely to see even larger values, close to ln(n) ≃ 32.
+//
+
+//
+//	Bit layout for ziggurat algorithm
+//	63:		Sign bit for symmetric distributions
+//	54-62:	Layer index (2^9 = 512 layers)
+//	0-53:	X value; top 8 bits are compared against acceptance threshold from the table; 31+23 = 54 bits total
+//	0-22:	Y value: uses single precision accuracy; NOTE: overlaps with lower bits of X, so some stat. bias exists
+//	See typedef ZigguratTable for table specs
+//
 
 //
 //	For compatibility between various SIMD versions, we run chs::STREAM_NUM parallel 128 bit states (bit streams)
@@ -40,15 +58,26 @@ namespace chs {
 	
 	//
 	//	Data structure for ziggurat tables
+	//	Layer 0: top; layer ZIG_SIZE-1: the irregular (bottom) layer
+	//	P[i]: acceptance threshold in ith layer {0..255} P[0] = 0 -- automatic rejection; P[i] = floor(256 * X[i-1]/X[i])
+	//	X[i]: scaling factor for i-th layer (its length); (length + 1.0 for the bottom layer)
+	//	Y[i]: y-coordinate for i-th layer; Y[0] = 1
 	//
 	typedef fp64_t (*PDF)(fp64_t);				//	Function pointer type for PDF calls; const implies PDF does not modify its host 
-	struct ZigguratTable {
-		fp64_t P;								//	Probability to accept rectangular sub-block i9n the irregular (bottom) layer
-		bool exp;								//	True if no additional comparison is required, e.g., for Exp() distribution
-		bool sym;								//	If true, symmetrize the distribution
+	struct ZiggTable {
+		bool exp;								//	True if Exp() distribution (no Y in the tail)
+		uint64_t sym;							//	Top bit flag for sign randomization: 0x8000000000000000U if on, 0 otherwise
 		PDF pdf;								//	PDF of the distribution
+		uint8_t P[ZIG_SIZE];					//	Automatic acceptance threshold
 		fp64_t X[ZIG_SIZE];						//	Table of X values
 		fp64_t Y[ZIG_SIZE];						//	Table of Y values
+	};
+	struct ZigguratTable {
+		uint64_t sgn;							//	If true, symmetrize the distribution
+		PDF pdf;								//	PDF of the distribution
+		bool exp;								//	No additional comparison is required in the tail, e.g., for Exp() distribution
+		fp64_t X[ZIG_SIZE + 1];					//	Table of X values; X[ZIG_SIZE] = X[ZIG_SIZE - 1] + 1.0
+		fp64_t Y[ZIG_SIZE + 1];					//	Table of Y values; Y[ZIG_SIZE] = Y[ZIG_SIZE - 1] * exp(X[ZIG_SIZE - 1])
 	};
 
 
@@ -75,6 +104,7 @@ namespace chs {
 			//	General ziggurat algorithm with exponential tail
 			//	This implementation may be about 5-10% slower than distribution-specific due to algorithmic overheads.
 			fp64_t			zig(const ZigguratTable &zt);
+			fp64_t			zigg(const ZiggTable &zt);
 
 		public:
 			//
@@ -84,15 +114,15 @@ namespace chs {
 
 			//	Use the following functions to get next 32 or 64 bit integer or 64 bit floating point [0,1) numbers.
 			//	These should all be inlined by the compiler.
-			uint64_t int64(){					//	random 64 bits (uint64); implicitly inlining
+			uint64_t		int64(){			//	random 64 bits (uint64); implicitly inlining
 				uint64_t result = i64[activeStream] + i64[activeStream + 1];	//	get uint64 directly from the <state> according to xoroshiro
 				next();							//	Move to the next stream; generate new bits if needed
 				return result;
 			};
-			uint32_t int32(){					//	random 32 bits (uint32)
+			uint32_t 		int32(){			//	random 32 bits (uint32)
 				return int64() >> 32;			//	Top 32 bits should have the best quality
 			};
-			fp64_t U01(){						//	Uniform[0,1)
+			fp64_t			U01(){				//	Uniform[0,1)
 				fp64_t result = f64[activeStream >> 1];	//	FP value from the current stream (activeStream points to <states>, must be divided by 2)
 				next();							//	Move to the next stream; generate new bits if needed
 				return result;
@@ -102,20 +132,18 @@ namespace chs {
 			//
 			//	Various distributions
 			//
-			fp64_t		U(const fp64_t a, const fp64_t b){	//	Uniform[a,b)
-				return a + (b - a) * U01();
-			}
 			uint64_t	int64(const uint64_t N);			//	random 64 bit integer in [0..N-1]
 			uint32_t	int32(const uint32_t N);			//	random 32 bit integer in [0..N-1] -- slightly faster than int64()
-			fp64_t		E();								//	Exp(1) via ziggurat
-			fp64_t		Ez();								//	Exp(1) via general ziggurat
-			fp64_t		E1();								//	Exp(1) via ln(∙) approximation
-			fp64_t		E(const fp64_t a) {					//	Exp(a)
-				return a * E();
-			}
-			fp64_t		N01();								//	Gaussian with 0 mean and variance 1 via rejection sampling
-			fp64_t		n01();								//	Another N(0,1) Gaussian via Box-Muller
-			fp64_t		Nz();								//	N(0,1) Gaussian via ziggurat
+															//
+			fp64_t		E1();								//	Exp(1) via ziggurat
+			fp64_t		Ez();								//	Exp(1) via optimized ziggurat
+			fp64_t		Exp1();								//	Exp(1) via ln(∙) approximation; called from zig() for the tail
+			fp64_t		E(const fp64_t a) {					//	Exp(a), calling E1()
+				return a * E1();}
+			fp64_t		N01();								//	N(0,1) Gaussian via ziggurat
+			fp64_t		Nz();								//	N(0,1) Gaussian via optimized ziggurat
+			fp64_t		U(const fp64_t a, const fp64_t b) {	//	Uniform[a,b)
+				return a + (b - a) * U01();}
 
 
 			//
@@ -127,7 +155,7 @@ namespace chs {
 			//	<data> is supposed to be 64 bit (8 byte) aligned; <length> >= 8 (in bytes)
 			//	WARNING: data is consumed in 64 bit chunks:
 			//	...if <length> is not divisible by 8, the left-overs are not utilized
-			void hash(const void* data, std::size_t length);
+			void		hash(const void* data, std::size_t length);
 
 
 			//
@@ -138,15 +166,14 @@ namespace chs {
 			//	Knuth's MMIX RNG: LCG generator employing just i64[0]
 			//	Use for testing and benchmarking purposes only: does not invoke next()
 			//
-			fp64_t U01_lcg(){
+			fp64_t		U01_lcg(){
 				i64[0] = i64[0] * 6364136223846793005 + 1442695040888963407;
-				return FP01(i64[0]);
-			}
-
-			fp64_t Exp1(){						//	Exp(1) via -log(U01)
-				return -log(1.0 - U01());		//	Subtract from 1 to avoid NaN if U01 takes 0 value
-			};
-			fp64_t qN01();						//	quick "Gaussian" with 0 mean and variance 1 via Binom(64,1/2) approximation
+				return FP01(i64[0]);}
+			fp64_t		E1_log(){			//	Exp(1) via -log(U01)
+				return -log(U01());};		//	Should subtract from 1 to avoid NaN if U01 takes 0 value if used in production
+			fp64_t		N01_bin();			//	quick "Gaussian" with 0 mean and variance 1 via Binom(64,1/2) approximation
+			fp64_t		N01_rej();			//	Gaussian with 0 mean and variance 1 via rejection sampling
+			fp64_t		N01_BxM();			//	Another N(0,1) Gaussian via Box-Muller
 	};
 
 

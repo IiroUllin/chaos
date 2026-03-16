@@ -12,6 +12,7 @@ CC = clang
 #	TRANSLATING INTO rm [something] /*
 #	
 SRCDIR = .#							Source directory; root OK for small projects
+ZIGDIR = ziggurat#					Ziggurat tables here (extra .hpp files)
 BUILDDIR = build#					Build path: final output goes here
 TESTDIR = test#						Test (executable) files go here
 OBJDIR = obj#						Object and temporary files go here
@@ -35,18 +36,30 @@ SIMD = -mavx2
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-CFLAGS = -I$(INCDIR) -std=c++11 -Wall -O3 -ffp-contract=on $(SIMD) -DNDEBUG
+CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O3 -ffp-model=fast -DNDEBUG
+#CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O3 -ffp-model=fast -DNDEBUG -DHPFP01 
 #CFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
 #
 #	DEBUG:
 #CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
 #
 #	Comments:
+#	
+#	-O1
+#	Includes: dead code elimination; basic scalar optimizations; simple loop transformations.
+#	-O2
+#	Adds: more aggressive function inlining; GVN; loop and SLP vectorization
+#	-O3
+#	Adds: speed at all costs; more aggressive inlining and memory layout optimization
 #
 #	-march=native enables all instruction sets available on the host machine
 #	-ffp-model=strict/fast/precise umbrella settings for FP optimizations
+#		strict:		full IEEE 754 compliance and bitwise reproducibility; disables all optimizations; respect for NaN and Inf
+#		fast:		may reassociate expressions, (a+b)+c -> a+(b+c)); assumes there are no NaN or Inf in the data
+#		precise:	default; allows for optimizations that do not affect the mathematical result, e.g., rounding
 #	-ffp-contract=on/off/fast fuse add multiply toggle
 #	-ffinite-math-only assume that NaN and Infinity never occur; note that std::isnan() is assumed to return false in this case
+#	-falign-functions=32 -falign-loops=32 (or other values) alignment of function/loops code -- may affect instruction cache performance
 
 
 
@@ -65,9 +78,9 @@ LDFLAGS = -L$(LIBDIR) -lstdc++ -lm -lchaos
 #	clean: clean all files except the source code
 
 
-#	By default the first target is default :)
+#	By default the first target is default
 #	But we can set it exlicitly
-.DEFAULT_GOAL := install
+.DEFAULT_GOAL := test
 
 
 #
@@ -76,7 +89,7 @@ LDFLAGS = -L$(LIBDIR) -lstdc++ -lm -lchaos
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	$(CC) $(CFLAGS) -c $^ -o $@
 
-$(BUILDDIR)/lib%.a: $(OBJDIR)/%.o
+$(BUILDDIR)/lib%.a: $(OBJDIR)/%.o $(ZIGDIR)/*.hpp makefile
 	ar crs $@ $^
 
 
@@ -90,7 +103,7 @@ $(BUILDDIR)/lib%.a: $(OBJDIR)/%.o
 #
 #	Create an executable file with tests for the chaos library
 #
-$(TEST): $(TARGET) test.cpp
+$(TEST): $(TARGET) test.cpp chaos.hpp $(BUILDDIR)/libchaos.a makefile
 	$(CC) $(CFLAGS) -o $(TEST) test.cpp $(LDFLAGS)
 
 #

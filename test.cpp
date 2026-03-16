@@ -87,7 +87,7 @@ int main() {
 
 	testType result;			//	Will contain benchmark results
 	chs::RNG rng;				//	RNG object stores the state and provides samplers
-	
+	double refTime;				//	Reference time (LCG)
 
 
 	std::cout << "\n### Hashing function (seeding) ###\n\n";
@@ -147,19 +147,20 @@ int main() {
 	//	Is there a more elegant way to do this?..
 	std::vector <Sampler> X = {
 		//{.func = [&](){return rng.U01_lcg();},	.id = "LCG    [benchmark]\t"},
-		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;},		.id = "rand() [benchmark]\t"},
+		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;},		.id = "rand()\t[benchmark]\t"},
 		//{.func = [&](){return distr(gen);},		.id = "std::  [benchmark]\t"},
 		{.func = [&](){return rng.U01();},		.id = "U01()\t\t\t"},
-		{.func = [&](){return rng.Exp1();},		.id = "Exp(1) [-ln(U01)]\t"},
-		{.func = [&](){return rng.E1();},		.id = "Exp(1)\t\t\t"},
-		{.func = [&](){return rng.E();},		.id = "E()    [ziggurat]\t"},
-		{.func = [&](){return rng.Ez();},		.id = "Ez()   [zig.gen.]\t"},
-		{.func = [&](){return rng.N01();},		.id = "N(0,1) [rejection]\t"},
-		{.func = [&](){return rng.n01();},		.id = "N(0,1) [Box-Muller]\t"},
-		{.func = [&](){return rng.Nz();},		.id = "N(0,1) [ziggurat]\t"},
-		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6} [truncated]\t"},
-		{.func = [&](){return rng.int64(7);},	.id = "{0...6} [64 bit]\t"},
-		{.func = [&](){return rng.int32(7);},	.id = "{0...6} [32 bit]\t"}
+		{.func = [&](){return rng.E1_log();},		.id = "Exp(1)\t[-ln(U01)]\t"},
+		{.func = [&](){return rng.Exp1();},		.id = "Exp1()\t[log approx]\t"},
+		{.func = [&](){return rng.E1();},		.id = "E1()\t[ziggurat]\t"},
+		{.func = [&](){return rng.Ez();},		.id = "Ez()\t[opt.zigg]\t"},
+		{.func = [&](){return rng.N01_rej();},	.id = "N(0,1)\t[rejection]\t"},
+		{.func = [&](){return rng.N01_BxM();},	.id = "N(0,1)\t[Box-Muller]\t"},
+		{.func = [&](){return rng.N01();},		.id = "N01()\t[ziggurat]\t"},
+		{.func = [&](){return rng.Nz();},		.id = "Nz()\t[opt.zigg]\t"},
+		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6}\t[truncated]\t"},
+		{.func = [&](){return rng.int64(7);},	.id = "{0...6}\t[64 bit]\t"},
+		{.func = [&](){return rng.int32(7);},	.id = "{0...6}\t[32 bit]\t"}
 	};
 	//	A sampler object for warm-up; start with std:: generator
 	Sampler tmp = {.func = [&](){return distr(gen);}, .id = ""};
@@ -167,9 +168,10 @@ int main() {
 
 	std::cout << "\n\n### Averaging over " << SAMPLE_NUM << " samples ###\n";
 	//	Run std:: generator to "warm-up" the CPU
-	std::cout << "  -- Warming up with std:: generator " << std::flush;
+	
+	std::cout << "  -- Warming up with the awesomly slow std:: generator " << std::flush;
 	result = benchMean(tmp.func, data);
-	double refTime = result.time;
+	refTime = result.time;
 	std::cout << std::setprecision(0) << refTime << "ms" << " --\n";
 	
 

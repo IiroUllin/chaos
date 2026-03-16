@@ -1,14 +1,13 @@
 #include "chaos.hpp"
 #include <cassert>					//	Assertions for debugging
+#include <iostream>
+#include <iomanip>
 
 
-#include <iostream>					//	For debugging
-
-
-#include "ziggurat/zt_exp_old.hpp"	//	Ziggurat table for Exp(1) generator
 #include "ziggurat/zt_exp.hpp"		//	Ziggurat table for Exp(1) generator
+#include "ziggurat/zt_exp2.hpp"		//	Ziggurat table for Exp(1) generator
 #include "ziggurat/zt_gauss.hpp"	//	Ziggurat table for N(0,1) generator
-
+#include "ziggurat/zt_gauss2.hpp"	//	Ziggurat table for Exp(1) generator
 
 /*----------------------------------------------------------------------------------+
  |																					|
@@ -20,7 +19,7 @@
 //
 //	Cyclic rotate left; amount should be less than 64
 //
-static inline uint64_t rotl(const uint64_t state, const int amount) {
+static inline uint64_t __rotl(const uint64_t state, const int amount) {
 	return (state << amount) | (state >> (64 - amount));
 }
 
@@ -28,14 +27,14 @@ static inline uint64_t rotl(const uint64_t state, const int amount) {
 //	Evolve the <state> using xoroshiro128+
 //	The <result> is is the sum <state[0] + state[1]> 
 //
-static inline uint64_t next(uint64_t* state) {
+static inline uint64_t __next(uint64_t* state) {
 	uint64_t s0 = state[0];
 	uint64_t s1 = state[1];
 
 	s1 ^= s0;
 
-	s0 = rotl(s0, 24) ^ s1 ^ (s1 << 16);
-	s1 = rotl(s1, 37);
+	s0 = __rotl(s0, 24) ^ s1 ^ (s1 << 16);
+	s1 = __rotl(s1, 37);
 
 	state[0] = s0; state[1] = s1;
 
@@ -45,7 +44,7 @@ static inline uint64_t next(uint64_t* state) {
 //
 //	xoroshiro128+ jump function, equivalent to 2^64 calls to next()
 //
-static void jump(uint64_t* state) {
+static void __jump(uint64_t* state) {
 	static const uint64_t JUMP[] = {0xDF900294D8F554A5U, 0x170865DF4B3201FCU};
 
 	uint64_t s0 = 0;
@@ -57,7 +56,7 @@ static void jump(uint64_t* state) {
 				s0 ^= state[0];
 				s1 ^= state[1];
 			}
-			next(state);						//	Evolve the state
+			__next(state);						//	Evolve the state
 		}
 
 	state[0] = s0;
@@ -96,7 +95,7 @@ void chs::RNG::hash(const void* data, std::size_t length){
 	for (i = 2; i < 2 * chs::STREAM_NUM; i += 2) {
 		i64[i] = i64[i-2];						//	Should probably be auto-vectorized by clang...
 		i64[i+1] = i64[i-1]; 
-		jump(&i64[i]);
+		__jump(&i64[i]);
 	}
 
 	activeStream = chs::STREAM_NUM - 2;			//	Now calling next() will make activeStream == 0,
@@ -108,13 +107,20 @@ void chs::RNG::hash(const void* data, std::size_t length){
 //	Increment activeStream and generate new states for all streams
 //	once all current streams have been used. 
 //
-inline void chs::RNG::next(){
+void chs::RNG::next(){
 	activeStream += 2;							//	Move to the next bit stream; increment by two, because states are two qwords
 	if (__builtin_expect(activeStream == 2 * chs::STREAM_NUM, false)){	//	Expect that activeStream < 2 * STREAM_NUM
 		activeStream = 0;						//	Start from 0 again...
 		//	Call xoroshiro's next() function for all streams
-		//	Convert random uint64 into fp(0,1)...
-		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) f64[i>>1] = FP01(::next(&i64[i]));
+		//	Convert random uint64 into [0,1) fp64-s...
+		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) f64[i>>1] = fp01(__next(&i64[i]));
+		//	It seems that such pre-computing of f64-s is vectorized by the compiler and provides x2-3 acceleration
+		//	compared to on-the-fly coversion without incurring pretty much any overhead for
+		//	cases when f64 versions are not needed...
+		//
+		//	fp01() gives speed boost of about 20% relative to FP01() at the expense of some accuracy:
+		//	log2(min.value) would be -52 vs -64 in the latter case.
+		//	Define symbol, HPFP01 to substitute fp01() with FP01() globally...
 	}
 }
 
@@ -164,55 +170,128 @@ uint32_t chs::RNG::int32(const uint32_t N){
 }
 
 
+
+//
+//	General ziggurat method with exponential sampling for the irregular (bottom) piece; based on...
+//	Marsaglia, Tsang; "The Ziggurat Method for Generating Random Variables" J.Stat.Soft. 5(8), 2002
+//
+fp64_t chs::RNG::zigg(const ZiggTable &zt) {
+	constexpr int LAST = ZIG_SIZE - 1;					//	Index of the last element of the ziggurat table
+	union {
+		fp64_t X;										//	The random variable itself
+		uint64_t iX;									//	Access to bits of X for sign access when needed
+	};												
+	fp64_t Y;											//	Y will be the generated if needed
+	int layer;											//	Layer index
+	uint64_t sign;										//	Stores the sign bit (needed for symmetric distributions)
+
+	for(;;) {											//	Infinite loop; break when a value is returned
+		uint64_t bits = int64();						//	Get i64 value from the bit stream
+
+		sign = zt.sym & bits;							//	Store the top bit masked by the zt.sym value...
+		bits <<= 1;										//	...and discard it from bits
+
+		layer = (bits >> (64-ZIG_SIZE_L2));				//	Take the next size_l2 bits as the layer index
+		bits <<= ZIG_SIZE_L2;							//	Rotate the rest to the top
+
+		//
+		//	zt.P[i] contains acceptance margin; zt.P[0] == 0 -- top layer always rejected
+		//	Rescale and return if the value is accepted
+		//
+		X = fp01(bits) * zt.X[layer];
+		if ((layer > 0) && (X <= zt.X[layer-1])) {iX ^= sign; return X;}	//	Quick diagnostic acceptance
+
+		//	MAIN BRANCH: accept the sample if uint8 zt.P[] threshold clears
+		if (__builtin_expect((bits >> 56) < zt.P[layer], true)) {
+			assert(layer > 0);							//	Layer 0 should always be rejected
+			X = fp01(bits) * zt.X[layer];
+getOut:		iX ^= sign;									//	Randomize the sign of X (top bit) if required
+			return X;
+		};
+
+		if (__builtin_expect(layer < LAST, true))		//	REGULAR LAYERS --------------------------------------------
+		{
+			X = fp01(bits) * zt.X[layer];				//	Rescale
+			//	NOTE: Y values are shifted by 1 in the table, which starts with zt.Y[0]=1.0
+			Y = zt.Y[layer + 1] + (zt.Y[layer] - zt.Y[layer + 1]) * fp01(bits << 31);
+			assert(Y >= zt.Y[layer + 1] && Y < zt.Y[layer]);	//	Y ~ Uniform(zt.Y[i + 1], zt.Y[i])
+			//
+			//	This entagles bottom 23 bits of X and Y introducing bias in lower bits of the output.
+			//	However, discarding them takes time and amounts to partial truncation, i.e. a similar bias
+			//
+		} 
+		else 											//	THE IRREGULAR (BOTTOM) LAYER -----------------------------
+		{					
+			assert(layer == LAST);
+			X = -log(1.0 - fp01(bits));					//	Exponential random variable via CDF inversion
+		//	X = Exp1();									//	Generate an exponential random variable
+		//	Either way doesn't seem to make much of a performance difference;
+		//	although version with -log(fp01()) is a bit faster, but may lead to FP exception
+			if (zt.exp) {
+				X += zt.X[LAST - 1];					//	Shift and return it: Y-comparison is not required
+				goto getOut;
+			}
+			Y = zt.Y[LAST] * exp(-X) * U01();			//	Generate a random Y coordinate under the exponential curve
+			X += zt.X[LAST-1];
+		}
+		//
+		if (Y <= zt.pdf(X)) goto getOut;				//	Accept X if (X,Y) is under the graph of the PDF
+		//
+		//	If we have not returned by now, the sample is rejected; restart from the top...
+		//
+		}
+
+}
+
+
+
+
+
 //
 //	General ziggurat method with exponential sampling for the irregular (bottom) piece; based on...
 //	Marsaglia, Tsang; "The Ziggurat Method for Generating Random Variables" J.Stat.Soft. 5(8), 2002
 //
 fp64_t chs::RNG::zig(const ZigguratTable &zt) {
-	const int last = ZIG_SIZE - 1;						//	Index of the last element of the ziggurat table
+	constexpr int LAST = ZIG_SIZE - 1;					//	Index of the last element of the ziggurat table
 	union {
-		fp64_t X;
-		uint64_t bits;
-	};													//	Access to bits of X to flip sign if needed
+		fp64_t X;										//	The return value
+		uint64_t iX;									//	Access to bits of X to control the sign
+	};
 	fp64_t Y;											//	(X,Y) will be the generated point under the PDF
-	uint64_t sign_base = static_cast<uint64_t>(zt.sym) << 63,		//	The sign bit is 1 if the distribution is symmetric
-			 sign;										//	This one will be updated depending on RNG	
+	uint64_t bits = int64(),							//	Get the random  bits from the stream
+			 sign = zt.sgn & bits;						//	Randomize the sign bit if the distribution is symmetric 
+	bits <<= 1;											//	Discard the top bit used for sign
 
-	for(;;) {											//	Infinite loop; break when a value is returned
-		uint64_t bits = int64();						//	Get i64 value from the bit stream
-
-		sign = sign_base & bits;						//	Use the top bit for the sign...
-		bits <<= 1;										//	...and discard it
-
-		int i = (bits >> (64-ZIG_SIZE_L2));				//	Take the next size_l2 bits as layer index
+	do {												//	Infinite loop; break when a value is returned
+		int i = (bits >> (64-ZIG_SIZE_L2)),				//	Take the first size_l2 bits as layer index
+			j = i + 1;									//	Next layer index
 		bits <<= ZIG_SIZE_L2;							//	Rotate the rest to the top
-		X = FP01(bits);									//	Convert them to [0,1) FP
-
-		if (__builtin_expect(i == 0, false)) {			//	The irreggular (bottom) layer
-			if (__builtin_expect(X <= zt.P, true)) {	//	Use X to check rectangular vs exponential part
-				X = zt.X[last] * U01();					//	Uniform in the rectangular part
-				break;
-			}
-			X = E1();									//	Generate an exponential random variable
-			if (zt.exp) { 
-				X += zt.X[last];						//	Shift and return it: Y-comparison is not required
-				break;
-			}
-			Y = zt.Y[last] * exp (-X) * U01();			//	Generate a random Y coordinate under the exponential curve
-			X += zt.X[last];
-		} else {
-			X *= zt.X[i];								//	Stretch X to [0, X[i]]
-			//	Accept if it is smaller than the previous margin
-			if (__builtin_expect(X <= zt.X[i-1], true)) break;
-			//	If not, generate a random Y-value in the rectangle and check if (X,Y) is under the PDF graph
-			Y = U(zt.Y[i], zt.Y[i-1]);
+		X = fp01(bits) * zt.X[j];						//	Generate X: convert bits to [0,1) and scale
+		
+		if (__builtin_expect(X <= zt.X[i], true)) {		//	MAIN PATH: accept the X value
+getOut:		iX ^= sign;									//	Flip the sign of X if <sign> is set...
+			return X;									//	...and return the value
 		}
-	//	if (Y <= exp(-0.5*X*X)) break;						//	Accept X if (X,Y) is under the graph of the PDF
-		if (Y <= zt.pdf(X)) break;						//	Accept X if (X,Y) is under the graph of the PDF
+
+		if (__builtin_expect(i < LAST, true))
+			Y = U(zt.Y[j], zt.Y[i]);					//	REGULAR LAYERS: generate a random Y-value in the rectangle 
+			//	Testing shows that trying to use lower bits of X to generate Y via
+			//	Y = zt.Y[j] + (zt.Y[i] - zt.Y[j]) * fp01(bits << 31);
+			//	doesn't improve performance (and, of course, introduces some statistical bias)...
+		else {
+			assert(i == LAST);							//	IRREGULAR (BOTTOM) layer:
+			X = Exp1() + zt.X[i];						//	Generate a shifted exponential random variable
+			if (zt.exp) 
+				goto getOut;							//	Y-comparison is not required
+			Y = zt.Y[j] * exp(-X) * U01();				//	Generate a random Y coordinate under the exponential curve
+		}
+
+		if (Y <= zt.pdf(X)) goto getOut;				//	Accept X if (X,Y) is under the graph of the PDF
+		//
 		//	If we have not returned by now, the sample is rejected: restart from the top...
-	}
-	bits ^= sign;										//	Flip the sign of X if <sign> is set
-	return X;
+		//
+		bits = int64();									//	Get the new i64 value from the bit stream
+	} while (true);
 }
 
 
@@ -220,52 +299,39 @@ fp64_t chs::RNG::zig(const ZigguratTable &zt) {
 //
 //	Genereate N(0,1) fp64 using general ziggurat method
 //
-fp64_t chs::RNG::Nz() {
+fp64_t chs::RNG::N01() {
 	return zig(ZT_GAUSS);
+}
+
+//
+//	Genereate N(0,1) fp64 using general ziggurat method
+//
+fp64_t chs::RNG::Nz() {
+	return zigg(ZT_GAUSS2);
+}
+
+
+
+
+//
+//	Genereate Exp(1) fp64 using optimized ziggurat method
+//
+fp64_t chs::RNG::Ez() {
+	return zigg(ZT_EXP2);
 }
 
 //
 //	Genereate Exp(1) fp64 using general ziggurat method
 //
-fp64_t chs::RNG::Ez() {
+fp64_t chs::RNG::E1() {
 	return zig(ZT_EXP);
-}
-
-//
-//	Genereate Exp(1) fp64 using ziggurat method
-//
-fp64_t chs::RNG::E(){
-	const int s2 = __ZT_EXP_LL2;						//	log2(<Table Size>)
-	const int last = (1 << s2) - 1;						//	Index of the last element of the ziggurat table
-
-	for(;;) {											//	Infinite loop; break when a value is returned
-		uint64_t bits = int64();						//	Get i64 value from the bit stream
-
-		int i = (bits >> (64-s2));						//	Take the top s2 bits as layer index (32 ziggurat layers at the moment)
-
-		bits <<= s2;									//	Rotate the rest to the top
-		fp64_t X = FP01(bits);							//	Convert them to [0,1) FP
-
-		if (__builtin_expect(i == 0, false)) {			//	The irreggular (bottom) layer
-			if (__builtin_expect(X <= __ZT_EXP_P, true))//	Use X to check rectangular vs exponential part
-				return __ZT_EXP_X[last] * U01();		//	Uniform in the rectangular part
-			return __ZT_EXP_X[last] + E1();				//	Exponential + shift otherwise
-		} else {
-			X *= __ZT_EXP_X[i];							//	Stretch X to [0, __ZT_EXP_X[i]]
-			//	Accept if it is smaller than the previous margin
-			if (__builtin_expect(X <= __ZT_EXP_X[i-1], true)) return X;
-			//	If not, generate a random Y-value in the rectangle and check if (X,Y) is under the PDF graph
-			fp64_t Y = U(__ZT_EXP_Y[i], __ZT_EXP_Y[i-1]);
-			if (Y <= exp(-X)) return X;					//	Accept if under the curve
-		}
-	}
 }
 
 
 //
 //	Genereate Exp(1) fp64 using log2-approximation method
 //
-fp64_t chs::RNG::E1(){
+fp64_t chs::RNG::Exp1(){
 	union {
 		uint64_t bits;
 		fp64_t X;									//	fp64 view of bits
@@ -332,7 +398,7 @@ fp64_t chs::RNG::E1(){
 //	Genereate N(0,1) fp64 via Box-Muller algorithm
 //	"A Note on the Generation of Random Normal Deviates". AMS. 29 (2); 1958
 //
-fp64_t chs::RNG::n01(){
+fp64_t chs::RNG::N01_BxM(){
 
 	if (icache != NaN) {						//	If some value is cached, return it... 
 		fp64_t result = cache;
@@ -351,7 +417,7 @@ fp64_t chs::RNG::n01(){
 //	Generate N(0,1) fp64 via rejection sampling algorithm in a circle
 //	Due to Marsaglia & Bray, "A Convenient Method for Generating Normal Variables". SIAM Rev. 6 (3): 260–264; 1964
 //
-fp64_t chs::RNG::N01(){
+fp64_t chs::RNG::N01_rej(){
 	
 	if (icache != NaN) {					//	If some value is cached, return it... 
 		fp64_t result = cache;
@@ -380,7 +446,7 @@ fp64_t chs::RNG::N01(){
 //	Approximate N(0,1) fp64 via Binom(64,1/2) by
 //	adding the 64 random bits
 //
-fp64_t chs::RNG::qN01(){
+fp64_t chs::RNG::N01_bin(){
 	//	Grab the number of 1 bits in the random i64, subtract the mean of 32
 	//	and normalize to get the correct variance.
 	//	Note that sqrt(variance) of Binom(64,1/2) is 4
