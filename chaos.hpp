@@ -2,7 +2,7 @@
 
 	/*------------------------------------------------------+
   	|														|
-	|	pseudoRNG + related utilities v0.5 (Feb 26, 2026)	|
+	|	pseudoRNG + related utilities v0.6 (Mar 27, 2026)	|
 	|														|
 	+------------------------------------------------------*/
 
@@ -21,17 +21,31 @@
 
 //
 //	The purpose of this library is to provide fast and statistically accurate samplers for common distributions.
-//	We aim for about 2^46 "good" samples. At the moment (2026), a CPU core generates 2^25 to 2^30 samples per second
-//	for nontrivial cases. Thus 2^46 samples would amount to between a dozen and a hundred hours of computation.
-//	The typical error due to sampling variance would be ≥ 2^-23 ≃ 1.2e-7 -- single precision machine eps.
+//	At the moment (Spring 2026), a CPU core (Intel 258V) generates about 6.7·10^8 samples per second for simple, 
+//	but nontrivial cases such as exponential or normal distributions.
+//	This amounts to about 2.5·10^13 of samples per 10 hours. For distributions with variance of O(1),
+//	the corresponding sampling error is about 2·10^-7, i.e., about single precision machine epsilon.
+//	This implies that accuracy beyond that is not particularly meaningful for such use cases.
+//	NOTE: some transforms, e.g., ln(x) near x=0, will amplify sampling bias and must be used with caution.
+//	For example, ln((k+1)·2^-n) - ln(k·2^-n) = ln(1+1/k) ~ 1/k, thus the discreteness of ln(x) is very apparent:
+//	even if the argument, x, is discretized with 2^-n precision, ln(x) still has O(1) precision even as n→∞.
+//	We also want to make sure that the tails of distribuitions are captured accurately enough, i.e.,
+//	that the theoretical extreme values reached typical for about 10^13 to 10^14 samples can actually be generated.
 //
 //	NOTE: the expected max. value of n iid N(0,1) samples is about sqrt(2ln(n)); variance ≃1/ln(n).
-//	For 2^46 samples, this impies that large values close to 8 are likely to appear, so we should make that possible.
+//	For 10^14 samples, this impies that large values close to 8 are likely to appear, so we should make that possible.
 //	Similarly, for Exp(1) random variable we are likely to see even larger values, close to ln(n) ≃ 32.
 //
+//	NOTE: I tried integer comparison for acceptance thresholds in ziggurat method,
+//	which involves storing an additional table of P-values.
+//	However this seems to provide at most ~5% speed-up and in some cases, 
+//	even decreases performance (+ uses an extra table).
+//	Thus the current version employs immediate FP conversion and FP comparisons.
+//
+
 
 //
-//	Bit layout for ziggurat algorithm
+//	Bit layout for ziggurat algorithm (NOT USED AT THE MOMENT)
 //	63:		Sign bit for symmetric distributions
 //	54-62:	Layer index (2^9 = 512 layers)
 //	0-53:	X value; top 8 bits are compared against acceptance threshold from the table; 31+23 = 54 bits total
@@ -59,19 +73,12 @@ namespace chs {
 	//
 	//	Data structure for ziggurat tables
 	//	Layer 0: top; layer ZIG_SIZE-1: the irregular (bottom) layer
-	//	P[i]: acceptance threshold in ith layer {0..255} P[0] = 0 -- automatic rejection; P[i] = floor(256 * X[i-1]/X[i])
+	//	P[i]: acceptance threshold in ith layer {0..255} P[0] = 0 -- automatic rejection; P[i] = floor(256 * X[i-1]/X[i]) -- NOT USED ATM
 	//	X[i]: scaling factor for i-th layer (its length); (length + 1.0 for the bottom layer)
 	//	Y[i]: y-coordinate for i-th layer; Y[0] = 1
 	//
-	typedef fp64_t (*PDF)(fp64_t);				//	Function pointer type for PDF calls; const implies PDF does not modify its host 
-	struct ZiggTable {
-		bool exp;								//	True if Exp() distribution (no Y in the tail)
-		uint64_t sym;							//	Top bit flag for sign randomization: 0x8000000000000000U if on, 0 otherwise
-		PDF pdf;								//	PDF of the distribution
-		uint8_t P[ZIG_SIZE];					//	Automatic acceptance threshold
-		fp64_t X[ZIG_SIZE];						//	Table of X values
-		fp64_t Y[ZIG_SIZE];						//	Table of Y values
-	};
+	typedef fp64_t (*PDF)(fp64_t);				//	Function pointer type for PDF calls 
+
 	struct ZigguratTable {
 		uint64_t sgn;							//	If true, symmetrize the distribution
 		PDF pdf;								//	PDF of the distribution
@@ -104,7 +111,6 @@ namespace chs {
 			//	General ziggurat algorithm with exponential tail
 			//	This implementation may be about 5-10% slower than distribution-specific due to algorithmic overheads.
 			fp64_t			zig(const ZigguratTable &zt);
-			fp64_t			zigg(const ZiggTable &zt);
 
 		public:
 			//

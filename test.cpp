@@ -153,11 +153,9 @@ int main() {
 		{.func = [&](){return rng.E1_log();},		.id = "Exp(1)\t[-ln(U01)]\t"},
 		{.func = [&](){return rng.Exp1();},		.id = "Exp1()\t[log approx]\t"},
 		{.func = [&](){return rng.E1();},		.id = "E1()\t[ziggurat]\t"},
-		{.func = [&](){return rng.Ez();},		.id = "Ez()\t[opt.zigg]\t"},
 		{.func = [&](){return rng.N01_rej();},	.id = "N(0,1)\t[rejection]\t"},
 		{.func = [&](){return rng.N01_BxM();},	.id = "N(0,1)\t[Box-Muller]\t"},
 		{.func = [&](){return rng.N01();},		.id = "N01()\t[ziggurat]\t"},
-		{.func = [&](){return rng.Nz();},		.id = "Nz()\t[opt.zigg]\t"},
 		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6}\t[truncated]\t"},
 		{.func = [&](){return rng.int64(7);},	.id = "{0...6}\t[64 bit]\t"},
 		{.func = [&](){return rng.int32(7);},	.id = "{0...6}\t[32 bit]\t"}
@@ -181,7 +179,7 @@ int main() {
 	result = benchMean(tmp.func, data);
 	refTime = result.time;
 	std::cout << "  -- Using a simple LCG to estimate the baseline time: <BASELINE> = " << std::setprecision(0) << refTime << "ms" << " --\n";
-	std::cout << "  -- The following time intervals are computed relative [... - <BASELINE>] to it --\n\n";
+	//std::cout << "  -- The following time intervals are computed relative [... - <BASELINE>] to it --\n\n";
 
 
 	//
@@ -192,7 +190,7 @@ int main() {
 		std::cout << sampler->id << std::setprecision(width)
 			<< "mean: " << result.data[0] 
 			<< "\tvar: " << result.data[1] 
-			<< "\t" << std::setprecision(0) << result.time - refTime << "ms\n";
+			<< "\t" << std::setprecision(0) << result.time << "ms\n";
 	};
 	
 
