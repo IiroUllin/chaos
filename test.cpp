@@ -75,8 +75,8 @@ testType benchMean (std::function<fp64_t()> X, std::vector<fp64_t> &data){	//	X 
 	sum /= SAMPLE_NUM;					//	Mean
 	sum2 /= SAMPLE_NUM;					//	2nd moment
 
-
-	elapsed = 1e3 * (finish.tv_sec - start.tv_sec) + 1e-6 * (finish.tv_nsec - start.tv_nsec);
+	//	Time in nanoseconds [ns]
+	elapsed = 1e9 * (finish.tv_sec - start.tv_sec) + 1e0 * (finish.tv_nsec - start.tv_nsec);
 
 	return {.time = elapsed, .data = {sum, sum2 - sum * sum, 0, 0, 0, 0, 0, 0}};
 }
@@ -90,8 +90,42 @@ int main() {
 	double refTime;				//	Reference time (LCG)
 
 
-	std::cout << "\n### Hashing function (seeding) ###\n\n";
+	if (__SIMD__)
+		std::cout << "\n### Vectorizing " << chs::SIMD_BLOCK << " qwords ###";
+	else std::cout << "\n### Vectorization disabled ###";
+
+	uint64_t seed = 1;
+	rng.hash(&seed, 8);
+	constexpr int intNum = 3 * chs::STREAM_NUM;		//	Number of random integers to reproduce
+	const uint64_t seq[] = {0xFF19D8050B35F999, 0xBEE5BCD522A6B02C, 0x47B6404D5C5C6126, 0x54861788E06BAF94, 0xCAF69BC8580DBCFA, 0x9EA5E106D7ECA532, 0x5C5F406D09D8E3CC, 0x71D62C695EAE5DAB, 0xAF257F14EDDFAA12, 0xB01C9115C1C8906A, 0x186AABDB7E9376C9, 0xAAD8F8EC8D52F128, 0x3A955D966838EA23, 0x19A117775CF10411, 0x3BB3F4E396894105, 0xD96F6CBD3E086F8, 0xD8F2512B07FC1491, 0x637DEFB438E58040, 0xE45BB52624EBFCBC, 0xA33EC29500A36B2F, 0xEFB51F3C96FA12AE, 0xB0978376FB9F5373, 0x85CA42229077C8EC, 0xBB519FB359B2A373};
+	//const uint64_t seq[] = {0x361875134302A945, 0x432AFF072093CCD3, 0x1A1C001962FEED1, 0x32029658A28C6289, 0xFF19D8050B35F999, 0xBEE5BCD522A6B02C, 0x47B6404D5C5C6126, 0x54861788E06BAF94, 0xCAF69BC8580DBCFA, 0x9EA5E106D7ECA532, 0x5C5F406D09D8E3CC, 0x71D62C695EAE5DAB, 0xAF257F14EDDFAA12, 0xB01C9115C1C8906A, 0x186AABDB7E9376C9, 0xAAD8F8EC8D52F128, 0x3A955D966838EA23, 0x19A117775CF10411, 0x3BB3F4E396894105, 0xD96F6CBD3E086F8, 0xD8F2512B07FC1491, 0x637DEFB438E58040, 0xE45BB52624EBFCBC, 0xA33EC29500A36B2F};
 	
+	//
+	//	Output the first intNum successive numbers starting from seed 1
+	//
+	//std::cout << "\n\nconst uint64_t seq[] = {" << std::hex << std::uppercase;
+	//for (int i = 0; i < intNum; i++) std::cout << "0x" << rng.int64() << (i < intNum-1 ? ", " : "");
+	//std::cout << "};\n\n" << std::dec;
+	
+
+	rng.hash(&seed, 8);								//	Hash 1
+	int fail = -1;
+	std::cout << "\n\n### Reproducing first " << intNum << " pseudo random integers starting from seed 1 ###\n";
+	for (int i = 0; i < intNum; i++) {
+		uint64_t result = rng.int64();
+		//std::cout << std::hex << std::uppercase << "\n0x" << seq[i] << "\t0x" << result << std::dec ;
+		if (seq[i] != result) {
+			fail = i;		//	Store the index of the failed entry
+			break;
+		}
+	}
+	if (fail == -1) 
+		std::cout << "  -- Ok --\n";
+	else
+		std::cout << "\n-- Failed at #" << fail + 1 << " --\n";
+
+
+	std::cout << "\n### Hashing function (seeding) bit patterns ###\n\n";
 
 	//	Hash 0, 1, 2, 3
 	for (uint64_t seed = 0; seed < 3; seed ++) {
@@ -164,13 +198,13 @@ int main() {
 	Sampler tmp = {.func = [&](){return distr(gen);}, .id = ""};
 
 
-	std::cout << "\n\n### Averaging over " << SAMPLE_NUM << " samples ###\n";
+	std::cout << "\n\n### Averaging over " << SAMPLE_NUM << " samples; displaying average time per sample ###\n";
 	//	Run std:: generator to "warm-up" the CPU
 	
 	std::cout << "  -- Warming up with the awesomly slow std:: generator " << std::flush;
 	result = benchMean(tmp.func, data);
 	refTime = result.time;
-	std::cout << std::setprecision(0) << refTime << "ms" << " --\n";
+	std::cout << std::setprecision(1) << refTime / SAMPLE_NUM << "ns" << " --\n";
 	
 
 	flag = 0;										//	Switch off rotating calculations indicator
@@ -178,8 +212,8 @@ int main() {
 	tmp.func = [&](){return rng.U01_lcg();};		//	LCG for baseline time
 	result = benchMean(tmp.func, data);
 	refTime = result.time;
-	std::cout << "  -- Using a simple LCG to estimate the baseline time: <BASELINE> = " << std::setprecision(0) << refTime << "ms" << " --\n";
-	//std::cout << "  -- The following time intervals are computed relative [... - <BASELINE>] to it --\n\n";
+	std::cout << "  -- Using a simple LCG to estimate the baseline time: " << std::setprecision(1) << refTime / SAMPLE_NUM << "ns" << " --\n";
+	std::cout << "  -- The following time intervals are computed relative [... - <BASELINE>] to it --\n\n";
 
 
 	//
@@ -190,7 +224,7 @@ int main() {
 		std::cout << sampler->id << std::setprecision(width)
 			<< "mean: " << result.data[0] 
 			<< "\tvar: " << result.data[1] 
-			<< "\t" << std::setprecision(0) << result.time << "ms\n";
+			<< "\t" << std::setprecision(1) << (result.time - refTime) / SAMPLE_NUM << "ns\n";
 	};
 	
 

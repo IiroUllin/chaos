@@ -3,18 +3,18 @@
 //#include <iostream>
 //#include <iomanip>
 
-
 #include "ziggurat/zt_exp.hpp"		//	Ziggurat table for Exp(1) generator
 #include "ziggurat/zt_gauss.hpp"	//	Ziggurat table for N(0,1) generator
+#include <immintrin.h>				//	AVX2 packed integer types
 
-#include <immintrin.h>				//	AVX2 packed integre types
 
-/*----------------------------------------------------------------------------------+
- |																					|
- |	Code from xoroshiro128+ by D. Blackman and S. Vigna (2016-18); public domain	|
- |	+ vectorized versions for avx, avx2, avx512 instructions sets.					|				
- |																					|
- +----------------------------------------------------------------------------------*/
+
+/*--------------------------------------------------------------------------------------+
+ |																						|
+ |	Routines from xoroshiro128+ by D. Blackman and S. Vigna (2016-18); public domain	|
+ |	+ vectorized versions for avx2, avx512 instructions sets.							|				
+ |																						|
+ +--------------------------------------------------------------------------------------*/
 
 
 //
@@ -26,80 +26,91 @@ static inline uint64_t __rotl(const uint64_t state, const int amount) {
 //
 //	Vectorized rotate left for 4 64-bit integers
 //
-static inline __m256i __rotl_avx2(const __m256i state, const int32_t amount) {
+static inline __m256i __rotl_avx2(const __m256i state, const int amount) {
     return _mm256_or_si256(_mm256_slli_epi64(state, amount), _mm256_srli_epi64(state, 64 - amount));
 }
 
 
 
-
 //
 //	Evolve the <state> using xoroshiro128+
-//	The <result> is is the sum <state[0] + state[1]> 
-//
+//	The <result> is is the sum <state[0] + state[SIMD_BLOCK]>
+//	(The original algorithm returns s0 + s1 before changing the state.)
+//	NOTE: Use state[SIMD_BLOCK] instead of state[1] because
+//	this function is called in __jump() even when vectorization is enabled
+
 static inline uint64_t __next(uint64_t* state) {
-	uint64_t s0 = state[0];
-	uint64_t s1 = state[1];
-
-	s1 ^= s0;
+	uint64_t s0 = state[0],
+			 s1 = state[chs::SIMD_BLOCK] ^ s0;
 
 	s0 = __rotl(s0, 24) ^ s1 ^ (s1 << 16);
 	s1 = __rotl(s1, 37);
 
-	state[0] = s0; state[1] = s1;
+	state[0] = s0; state[chs::SIMD_BLOCK] = s1;
 
 	return s0 + s1;
 }
 //
-//	Vectorized version for two 128 bit states at once
+//	Vectorized version for 4 streams at once;
+//	state[0] contains 4 consecutive L-qwords; state[1] -- 4 H-qwords
 //
-/*
 static inline __m256i __next_avx2(__m256i* state) {
-	uint64_t s0 = state[0];
-	uint64_t s1 = state[1];
+    __m256i s0 = state[0],
+			s1 = _mm256_xor_si256(state[1], s0);
 
-	s1 ^= s0;
-
-	s0 = __rotl(s0, 24) ^ s1 ^ (s1 << 16);
-	s1 = __rotl(s1, 37);
+	// s0 = __rotl(s0, 24) ^ s1 ^ (s1 << 16);
+    s0 = _mm256_xor_si256(_mm256_xor_si256(__rotl_avx2(s0, 24), s1), _mm256_slli_epi64(s1, 16));
+	s1 = __rotl_avx2(s1, 37);
 
 	state[0] = s0; state[1] = s1;
 
-	return s0 + s1;
+    return _mm256_add_epi64(s0, s1);
 }
-*/
-
-
 
 
 //
-//	xoroshiro128+ jump function, equivalent to 2^64 calls to next()
+//	xoroshiro128+ jump function, equivalent to 2^64 calls to __next()
+//	The L and H qwords are separated by chs::SIMD_BLOCK qwords
 //
 static void __jump(uint64_t* state) {
 	static const uint64_t JUMP[] = {0xDF900294D8F554A5U, 0x170865DF4B3201FCU};
 
-	uint64_t s0 = 0;
-	uint64_t s1 = 0;
+	uint64_t s0 = 0,
+			 s1 = 0;
 	for(int i = 0; i < 2; i++)
 		for(int b = 0; b < 64; b++) {
 			//	static_cast: otherwise 1 may be given smaller size container (e.g. 32 bit)
 			if (JUMP[i] & static_cast<uint64_t>(1) << b) {
-				s0 ^= state[0];
-				s1 ^= state[1];
+				s0 ^= state[0];						//	The L qword
+				s1 ^= state[chs::SIMD_BLOCK];		//	H qword is shifted by SIMD_BLOCK
 			}
-			__next(state);						//	Evolve the state
+			__next(state);							//	Evolve the state
 		}
 
 	state[0] = s0;
-	state[1] = s1;
+	state[chs::SIMD_BLOCK] = s1;
 }
 
 
 
 //
+//	Create remaining streams executing xoroshiro's __jump() function 
+//
+void chs::RNG::update_streams() {
+	for (int i = 1; i < STREAM_NUM; i++){								
+		i64[_L[i]] = i64[_L[i-1]];					//	Copy the L qword
+		i64[_H[i]] = i64[_H[i-1]];					//	Copy the H qword 
+		__jump(&i64[_L[i]]);						//	Call xoroshiro's __jump() function
+	}
+	//std::cout << "\n" << std::hex << std::uppercase;
+	//for (int i = 0; i < STREAM_NUM; i++)
+	//	std::cout << i64[_L[i]] + i64[_H[i]]<< "\n";
+}
+
+//
 //	128 bit hashing function.
 //	Takes <length> bytes from <data>
-//	and hashes it into i64[0,1] (two qwords)
+//	and hashes it into i64[0] and i64[SIMD_BLOCK] (two qwords)
 //	remaining streams are then generated using the xoroshiro128+ jump function.
 //	NOTE: <data> must be aligned and <length> should contain at least one 64 bit chunk
 //	NOTE: this will erase the <state> and <cache> even if <length> < 8 and no data is hashed
@@ -109,27 +120,19 @@ void chs::RNG::hash(const void* data, std::size_t length){
 	length >>= 3;								//	original length is in bytes, this one is in qwords (64 bits)
 	assert(!(uintptr_t(data) & 0b111));			//	Last 3 bits must be 0 for int64-aligned data
 	uint64_t* qw_data = (uint64_t*) data;		//	Convert <data> into uint64 pointer
-	int i = 0;									//	Currently updated qword of the first <state>
 
-	i64[0] = 0;	i64[1] = 0;						//	Clear the bits of the 1st bit stream
+	i64[_L[0]] = 0;	i64[_H[0]] = 0;				//	Clear the bits of the 0th bit stream
 
 	while (length > 0) {
-		i64[i] ^= chs::mix64(*qw_data);			//	Mix current data chunk and merge it into the <state> 
-		i ^= 1;									//	0->1 and 1->0
+		i64[_L[0]] ^= chs::mix64(*qw_data);		//	Mix current data chunk and merge it into the <state> 
 		//	Mix its mixture into the "other" state qword
 		//	NOTE: the constant here is ad hoc and not optimized in any way
-		i64[i] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
+		i64[_H[0]] ^= chs::mix64(*qw_data ^ 0xA1B2C3D4E5F60789U);	
 		qw_data++; length--;
 	}
 
-	//	Generate the remaining bit streams for SIMD processing using the xoroshiro jump function
-	for (i = 2; i < 2 * chs::STREAM_NUM; i += 2) {
-		i64[i] = i64[i-2];						//	Should probably be auto-vectorized by clang...
-		i64[i+1] = i64[i-1]; 
-		__jump(&i64[i]);
-	}
-
-	activeStream = chs::STREAM_NUM - 2;			//	Now calling next() will make activeStream == 0,
+	update_streams();							//	Generate all the other states from the hashed first state
+	activeStream = STREAM_NUM - 1;				//	Now calling next() will make activeStream == 0,
 	next();										//	call xoroshiro on all hashed  bits, and generate UInt64 cache
 }
 
@@ -139,19 +142,28 @@ void chs::RNG::hash(const void* data, std::size_t length){
 //	once all current streams have been used. 
 //
 void chs::RNG::next(){
-	activeStream += 2;							//	Move to the next bit stream; increment by two, because states are two qwords
-	if (__builtin_expect(activeStream == 2 * chs::STREAM_NUM, false)){	//	Expect that activeStream < 2 * STREAM_NUM
+	activeStream++;								//	Move to the next bit stream
+	if (__builtin_expect(activeStream == STREAM_NUM, false)){	//	Expect that activeStream < STREAM_NUM
+		//
 		activeStream = 0;						//	Start from 0 again...
-		//	Call xoroshiro's next() function for all streams
+		//
+		//	Call xoroshiro's __next() function for all streams
 		//	Convert random uint64 into [0,1) fp64-s...
-		for (int i = 0; i < 2 * chs::STREAM_NUM; i += 2) f64[i>>1] = fp01(__next(&i64[i]));
-		//	It seems that such pre-computing of f64-s is vectorized by the compiler and provides x2-3 acceleration
-		//	compared to on-the-fly coversion without incurring pretty much any overhead for
-		//	cases when f64 versions are not needed...
+		//
+#ifdef __AVX2__
+		__m256i *data = (__m256i*) i64;						//	C-style cast; i64 MUST be properly aligned, or this may crash!
+		__m256d *floats = (__m256d*) f64;					//	Same here!
+		for (int i = 0; i < BLOCK_NUM; i++){
+			*(floats++) = fp01_avx2(__next_avx2(data));		//	Process four 64 byte chunks at a time
+			data += 2;										//	Increment by 2 (data++ would point to the H-qwords of the same states)
+		}
+#else
+		for (int i = 0; i < STREAM_NUM; i++) f64[i] = fp01(__next(&i64[_L[i]]));	//	No vectorization enabled
+#endif
 		//
 		//	fp01() gives speed boost of about 20% relative to FP01() at the expense of some accuracy:
 		//	log2(min.value) would be -52 vs -64 in the latter case.
-		//	Define symbol, HPFP01 to substitute fp01() with FP01() globally...
+		//	Define symbol, HPFP01, to substitute fp01() with FP01() globally...
 	}
 }
 
@@ -219,7 +231,7 @@ fp64_t chs::RNG::zig(const ZigguratTable &zt) {
 	bits <<= 1;											//	Discard the top bit used for sign
 
 	do {												//	Infinite loop; break when a value is returned
-		int i = (bits >> (64-ZIG_SIZE_L2)),				//	Take the first size_l2 bits as layer index
+		int i = (bits >> (64 - ZIG_SIZE_L2)),			//	Take the first size_l2 bits as layer index
 			j = i + 1;									//	Next layer index
 		bits <<= ZIG_SIZE_L2;							//	Rotate the rest to the top
 		X = fp01(bits) * zt.X[j];						//	Generate X: convert bits to [0,1) and scale
@@ -253,7 +265,7 @@ getOut:		iX ^= sign;									//	Flip the sign of X if <sign> is set...
 
 
 //
-//	Genereate N(0,1) fp64 via ziggurat method
+//	Generate N(0,1) fp64 via ziggurat method
 //
 fp64_t chs::RNG::N01() {
 	return zig(ZT_GAUSS);
@@ -262,7 +274,7 @@ fp64_t chs::RNG::N01() {
 
 
 //
-//	Genereate Exp(1) fp64 via ziggurat method
+//	Generate Exp(1) fp64 via ziggurat method
 //
 fp64_t chs::RNG::E1() {
 	return zig(ZT_EXP);
@@ -270,7 +282,7 @@ fp64_t chs::RNG::E1() {
 
 
 //
-//	Genereate Exp(1) fp64 using log2-approximation method
+//	Generate Exp(1) fp64 using log2-approximation method
 //
 fp64_t chs::RNG::Exp1(){
 	union {
@@ -336,7 +348,7 @@ fp64_t chs::RNG::Exp1(){
 
 
 //
-//	Genereate N(0,1) fp64 via Box-Muller algorithm
+//	Generate N(0,1) fp64 via Box-Muller algorithm
 //	"A Note on the Generation of Random Normal Deviates". AMS. 29 (2); 1958
 //
 fp64_t chs::RNG::N01_BxM(){

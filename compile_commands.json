@@ -1,11 +1,11 @@
 [
     {
-        "command": "cc -c -I/home/ibrahim/include -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on -mavx2 -o obj/chaos.o chaos.cpp",
+        "command": "cc -c -I/home/ibrahim/include -std=c++11 -Wall -O3 -mavx2 -ffp-model=fast -DNDEBUG -o obj/chaos.o chaos.cpp",
         "directory": "/home/ibrahim/code/chaos.cpp",
         "file": "/home/ibrahim/code/chaos.cpp/chaos.cpp"
     },
     {
-        "command": "cc -c -I/home/ibrahim/include -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on -mavx2 -o test/test-chaos test.cpp",
+        "command": "cc -c -I/home/ibrahim/include -std=c++11 -Wall -O3 -mavx2 -ffp-model=fast -DNDEBUG -o test/test-chaos test.cpp",
         "directory": "/home/ibrahim/code/chaos.cpp",
         "file": "/home/ibrahim/code/chaos.cpp/test.cpp"
     }

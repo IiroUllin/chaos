@@ -1,10 +1,10 @@
 
 
-	/*------------------------------------------------------+
-  	|														|
-	|	pseudoRNG + related utilities v0.6 (Mar 27, 2026)	|
-	|														|
-	+------------------------------------------------------*/
+	/*----------------------------------------------------------+
+  	|															|
+	|	pseudoRNG + related utilities v0.7 (April 10, 2026)		|
+	|															|
+	+----------------------------------------------------------*/
 
 
 #pragma once
@@ -64,9 +64,38 @@
 
 
 namespace chs {
+	//
+	//	The following constants depend on the width of the available SIMD registers.
+	//	Uses constants defined in generic.hpp
+	//
+	constexpr int SIMD_BLOCK = 1 << __SIMD__;				//	#qwords for vectorization: 2^3=8 for AVX512; 2^2=4 for AVX2; 2^0=1 otherwise
+	//
+	//	Constants prescribing layout of RNG structure
+	//	
+	constexpr int STREAM_NUM = 8;							//	Number of bit streams for SIMD processing; should be a power of 2
+															//	8 ⨉ 64 bits = 512 bits -- size of AVX12 registers; total 128 bytes for all states
+	constexpr int BLOCK_NUM = STREAM_NUM >> __SIMD__;		//	Same as STREAM_NUM / SIMD_BLOCK -- number of SIMD blocks
+	//
+	//	The state of xoroshiro128+ consists of two qwords (64 + 64 bits)
+	//	_L[i] and _H[i] contain locations of these qwords for ith stream in i64[] array of the RNG object (see below as well)
+	//	It is possible to use arithmetic instead of tabulating these numbers, but this seems marginally faster...
+	//
+#ifdef __AVX512__
+	constexpr int _L[] = {0, 1, 2,  3,  4,  5,  6,  7};		//	Lower qwords of the ith state
+	constexpr int _H[] = {8, 9, 10, 11, 12, 13, 14, 15};	//	Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK (8)
+#elif defined __AVX2__
+	constexpr int _L[] = {0, 1, 2, 3, 8,  9,  10, 11};		//	Lower qwords of the ith state
+	constexpr int _H[] = {4, 5, 6, 7, 12, 13, 14, 15};		//	Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK	(4)	
+#else
+	constexpr int _L[] = {0, 2, 4, 6, 8, 10, 12, 14};		//	Lower qwords of the ith state
+	constexpr int _H[] = {1, 3, 5, 7, 9, 11, 13, 15};		//	Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK	(1)	
+#endif
 
 
-	constexpr int STREAM_NUM = 4;						//	Maximal number of bit streams for SIMD processing; should be a power of 2
+
+	//
+	//	Ziggurat parameters
+	//
 	constexpr int ZIG_SIZE_L2 = 9;						//	log2 of the size of ziggurat tables; currently fixed, as all...
 	constexpr int ZIG_SIZE = 1 << ZIG_SIZE_L2;			//	...tables are packed into the same data structure type (below).
 	
@@ -91,9 +120,16 @@ namespace chs {
 	//
 	//	Object containing the RNG state and functions
 	//
-	class alignas(__SIMD_ALIGN__) RNG {					//	__SIMD_ALIGN__ from "generic.h"
+	class alignas(64) RNG {						//	Always 64 now; was __SIMD_ALIGN__ from "generic.hpp"
 		private:
 			uint64_t		i64[2 * STREAM_NUM] = {0};	//	RNG state; 2 qwords per stream
+			//	Single stream of xoroshiro128+ requires two qwords; call them L and H
+			//	Memory layout of these states in i64[]:
+			//		L0.H0...L7.H7						--	No vectorization: index(H[n]) = index(L[n])+1;	SIMD_BLOCK = 1
+			//		L0...L3.H0...H3.L4...L7.H4...H7		--	AVX2: index(H[n]) = index(L[n]) + 4;			SIMD_BLOCK = 4
+			//		L0...L7.H0...H7						--	AVX512: index(H[n]) = index(L[n]) + 8;			SIMD_BLOCK = 8
+			//	This layout seems most reasonable for x86-64 CPUs with 64 byte cache line (2026) No idea about ARM...
+			//
 			fp64_t			f64[STREAM_NUM];			//	U01 random numbers generated from i64[]
 			union {										//	Cache for Gaussians; NaN when empty 
 				uint64_t	icache = NaN;
@@ -101,8 +137,13 @@ namespace chs {
 			};
 
 			//	Index of the stream for current output; should be in [0..2*STREAM_NUM - 2]
-			//	i64[activeStream] and i64[activeStream+1] hold the active RNG state
+			//	i64[L[activeStream]] and i64[H[activeStream]] hold the active RNG state
+
 			int				activeStream = 0;
+
+			/*------------------------------------------+
+			|				PRIVATE METHODS				|
+			+------------------------------------------*/
 
 			//	Advance to the next bit stream;
 			//	generate new states in all bit streams and cache f64[] when needed
@@ -112,6 +153,10 @@ namespace chs {
 			//	This implementation may be about 5-10% slower than distribution-specific due to algorithmic overheads.
 			fp64_t			zig(const ZigguratTable &zt);
 
+			//	Fill out all the bit stream states via xoroshiro's long jump starting from the first stream.
+			//	Should be called after hashing/cloning/modifying the first stream. 
+			void			update_streams();
+
 		public:
 			//
 			//	Basic access functions
@@ -120,17 +165,18 @@ namespace chs {
 
 			//	Use the following functions to get next 32 or 64 bit integer or 64 bit floating point [0,1) numbers.
 			//	These should all be inlined by the compiler.
-			uint64_t		int64(){			//	random 64 bits (uint64); implicitly inlining
-				uint64_t result = i64[activeStream] + i64[activeStream + 1];	//	get uint64 directly from the <state> according to xoroshiro
-				next();							//	Move to the next stream; generate new bits if needed
+			uint64_t		int64(){				//	random 64 bits (uint64); implicitly inlining
+				//	get uint64 directly from the <state> according to xoroshiro
+				uint64_t result = i64[_L[activeStream]] + i64[_H[activeStream]];
+				next();								//	Move to the next stream; generate new bits if needed
 				return result;
 			};
-			uint32_t 		int32(){			//	random 32 bits (uint32)
-				return int64() >> 32;			//	Top 32 bits should have the best quality
+			uint32_t 		int32(){				//	random 32 bits (uint32)
+				return int64() >> 32;				//	Top 32 bits should have the best quality
 			};
-			fp64_t			U01(){				//	Uniform[0,1)
-				fp64_t result = f64[activeStream >> 1];	//	FP value from the current stream (activeStream points to <states>, must be divided by 2)
-				next();							//	Move to the next stream; generate new bits if needed
+			fp64_t			U01(){					//	Uniform[0,1)
+				fp64_t result = f64[activeStream];	//	FP value from the current stream
+				next();								//	Move to the next stream; generate new bits if needed
 				return result;
 			};
 

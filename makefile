@@ -36,9 +36,10 @@ SIMD = -mavx2
 #	Keep the needed version and comment out the other
 #
 #	RELEASE:
-CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O3 -ffp-model=fast -DNDEBUG
+#CFLAGS = -I$(INCDIR) -std=c++11 -Wall -O3 -ffp-model=fast -DNDEBUG
+CFLAGS = -I$(INCDIR) -std=c++11 -Wall -O3 $(SIMD) -ffp-model=fast -DNDEBUG
 #CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O3 -ffp-model=fast -DNDEBUG -DHPFP01 
-#CFLAGS = -I$(INCDIR) -std=c++11 -W -O2 $(SIMD) -DNDEBUG
+#CFLAGS = -I$(INCDIR) -std=c++11 -W -O3 -ffp-model=fast -DNDEBUG
 #
 #	DEBUG:
 #CFLAGS = -I$(INCDIR) -std=c++11 -Wall -march=native -O2 -ffp-model=precise -ffp-contract=on $(SIMD) 
@@ -89,7 +90,7 @@ LDFLAGS = -L$(LIBDIR) -lstdc++ -lm -lchaos
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	$(CC) $(CFLAGS) -c $^ -o $@
 
-$(BUILDDIR)/lib%.a: $(OBJDIR)/%.o $(ZIGDIR)/*.hpp makefile
+$(BUILDDIR)/lib%.a: $(OBJDIR)/%.o $(ZIGDIR)/*.hpp chaos.hpp makefile
 	ar crs $@ $^
 
 
