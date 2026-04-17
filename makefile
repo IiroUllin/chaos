@@ -88,9 +88,11 @@ LDFLAGS = -L$(LIBDIR) -lstdc++ -lm -lchaos
 #    GENERIC IMPLICIT RULES
 #
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
+	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $^ -o $@
 
 $(BUILDDIR)/lib%.a: $(OBJDIR)/%.o $(ZIGDIR)/*.hpp chaos.hpp makefile
+	@mkdir -p $(@D)
 	ar crs $@ $^
 
 
@@ -105,6 +107,7 @@ $(BUILDDIR)/lib%.a: $(OBJDIR)/%.o $(ZIGDIR)/*.hpp chaos.hpp makefile
 #    Create an executable file with tests for the chaos library
 #
 $(TEST): $(TARGET) test.cpp chaos.hpp $(BUILDDIR)/libchaos.a makefile
+	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -o $(TEST) test.cpp $(LDFLAGS)
 
 #
