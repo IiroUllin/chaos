@@ -1,8 +1,8 @@
 
 	/*--------------------------------------------------------------+
 	|                                                               |
-	|  pseudoRNG + related utilities: testing / benchmarking suite  |
-	|                     v0.7 (April 16, 2026)                     |
+	|            LibChaos: testing / benchmarking suite             |
+	|                     v0.7 (April 17, 2026)                     |
 	|                                                               |
 	|                                                               |
 	|                 Written by Ibrahim Fatkullin                  |

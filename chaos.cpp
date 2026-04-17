@@ -1,7 +1,7 @@
 
 	/*--------------------------------------------------------------+
 	|                                                               |
-	|                 pseudoRNG + related utilities                 |
+	|           LibChaos: pseudoRNG + related utilities             |
 	|                     v0.7 (April 17, 2026)                     |
 	|                                                               |
 	|                                                               |

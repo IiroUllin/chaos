@@ -1,5 +1,6 @@
 *.o
 *.a
+compile_commands.json
 build/
 test/
 obj/
