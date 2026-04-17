@@ -102,7 +102,7 @@ namespace chs {
 	//  _L[i] and _H[i] contain locations of these qwords for ith stream in i64[] array of the RNG object (see below as well)
 	//  It is possible to use arithmetic instead of tabulating these numbers, but this seems marginally faster...
 	//
-#ifdef __AVX512__
+#ifdef __AVX512F__
 	constexpr int _L[] = {0, 1, 2,  3,  4,  5,  6,  7};     //  Lower qwords of the ith state
 	constexpr int _H[] = {8, 9, 10, 11, 12, 13, 14, 15};    //  Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK (8)
 #elif defined __AVX2__
