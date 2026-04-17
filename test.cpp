@@ -1,52 +1,80 @@
+
+	/*--------------------------------------------------------------+
+	|                                                               |
+	|  pseudoRNG + related utilities: testing / benchmarking suite  |
+	|                     v0.7 (April 16, 2026)                     |
+	|                                                               |
+	|                                                               |
+	|                 Written by Ibrahim Fatkullin                  |
+	|                                                               |
+	|   Terms of use: CC0 1.0                                       |
+	|   http://creativecommons.org/publicdomain/zero/1.0/           |
+	|                                                               |
+	|   To the extent possible under law, the author has dedicated  |
+	|   all copyright and related and neighboring rights to this    |
+	|   software to the public domain worldwide.                    |
+	|                                                               |
+	|   This software is distributed without any warranty.          |
+	|   The author bears no responsibility for anything that        |
+	|   has happened, is happening, may (or may not) be happening   |
+	|   to any person (or entity) which has (or has not) used this  |
+	|   (or any other) software (or hardware) in any imaginable     |
+	|   (or unimaginable) fashion (or lack thereof). 🤪             |
+	|                                                               |
+	+--------------------------------------------------------------*/
+
+
+
+
 #include <iostream>
 #include <iomanip>
 #include <cassert>
 #include <string>
 #include <vector>
-#include <random>		//	For benchmarking
+#include <random>       //  For benchmarking
 #include <time.h>
 #include <math.h>
 #include <cstdint>
-#include <bitset> 		//	For std::bitset
-#include <functional>	//	For lambda-functions
+#include <bitset>       //  For std::bitset
+#include <functional>   //  For lambda-functions
 
 #include "chaos.hpp"
 
-//#define SAMPLE_NUM 16777216			//	Number of samples for calculations
-//#define SAMPLE_NUM 10000000			//	Number of samples for calculations
-#define SAMPLE_NUM 134217728			//	Number of samples for calculations
 
-int flag = 1;							//	Flag for terminal output
+
+#define SAMPLE_NUM 134217728            //  Number of samples for calculations
+
+int flag = 1;                           //  Flag for terminal output
 
 struct testType {
-	double time;						//	Will contain time in [ms]
-	fp64_t data[8];						//	...for whatever quantities computed (up to 8)
+	double time;                        //  Will contain time in [ms]
+	fp64_t data[8];                     //  ...for whatever quantities computed (up to 8)
 };
 
 
 
 //
-//	Compute the mean and variance of the provided random variable
-//	while filling in an array; return the elapsed time in [ms]
+//  Compute the mean and variance of the provided random variable
+//  while filling in an array; return the elapsed time in [ms]
 //
-testType benchMean (std::function<fp64_t()> X, std::vector<fp64_t> &data){	//	X is a random variable (method of chs::RNG)	
+testType benchMean (std::function<fp64_t()> X, std::vector<fp64_t> &data){  //  X is a random variable (method of chs::RNG)
 	struct timespec start, finish;
 	double elapsed;
 	std::string chars[] = {"|","/","-","\\"};
 	int index = 0;
 
 	fp64_t sum = 0.0, sum2 = 0.0;
-    //std::fill(data.begin(), data.end(), 0.0);					//	Clear the data
+    //std::fill(data.begin(), data.end(), 0.0);                 //  Clear the data
 
-	if (flag) std::cout << " ";									//	Prepare for output
+	if (flag) std::cout << " ";                                 //  Prepare for output
 
 	clock_gettime(CLOCK_MONOTONIC, &start);
-	//	Note that CLOCK_MONOTONIC may not be provided by the OS
-	//	-- can be checked by sysconf(_SC_MONOTONIC_CLOCK)
-	//	In this case CLOCK_REALTIME can be used instead (must always be provided)
-	//	This clock, however, can be changed while the program is running
-	//	in which case the overall results may be incorrect
-	//	CLOCK_MONOTONIC_COARSE can also be used. It is faster but coarser
+	//  Note that CLOCK_MONOTONIC may not be provided by the OS
+	//  -- can be checked by sysconf(_SC_MONOTONIC_CLOCK)
+	//  In this case CLOCK_REALTIME can be used instead (must always be provided)
+	//  This clock, however, can be changed while the program is running
+	//  in which case the overall results may be incorrect
+	//  CLOCK_MONOTONIC_COARSE can also be used. It is faster but coarser
 
 	for (int j = 0; j < SAMPLE_NUM; j++) {
 		data[j] = X();
@@ -60,22 +88,22 @@ testType benchMean (std::function<fp64_t()> X, std::vector<fp64_t> &data){	//	X 
 
 	clock_gettime(CLOCK_MONOTONIC, &finish);
 
-	if (flag) std::cout << "\b";									//	Remove last symbol
+	if (flag) std::cout << "\b";                                //  Remove last symbol
 	
-	//	Compute some statistics 
+	//  Compute some statistics 
 	for (int j=0; j<SAMPLE_NUM; j++) {
 		fp64_t value = data[j];
 		sum += value;
 		sum2 += value * value;
 	}
 
-	//	A sanity check that the math didn't go awfully awry
+	//  A sanity check that the math didn't go awfully awry
 	assert(!(std::isnan(sum) | std::isnan(sum2)));
 	
-	sum /= SAMPLE_NUM;					//	Mean
-	sum2 /= SAMPLE_NUM;					//	2nd moment
+	sum /= SAMPLE_NUM;                  //  Mean
+	sum2 /= SAMPLE_NUM;                 //  2nd moment
 
-	//	Time in nanoseconds [ns]
+	//  Time in nanoseconds [ns]
 	elapsed = 1e9 * (finish.tv_sec - start.tv_sec) + 1e0 * (finish.tv_nsec - start.tv_nsec);
 
 	return {.time = elapsed, .data = {sum, sum2 - sum * sum, 0, 0, 0, 0, 0, 0}};
@@ -85,37 +113,38 @@ testType benchMean (std::function<fp64_t()> X, std::vector<fp64_t> &data){	//	X 
 
 int main() {
 
-	testType result;			//	Will contain benchmark results
-	chs::RNG rng;				//	RNG object stores the state and provides samplers
-	double refTime;				//	Reference time (LCG)
+	testType result;            //  Will contain benchmark results
+	chs::RNG rng;               //  RNG object stores the state and provides samplers
+	double refTime;             //  Reference time (LCG)
 
 
-	if (__SIMD__)
+#ifdef __SIMD__
 		std::cout << "\n### Vectorizing " << chs::SIMD_BLOCK << " qwords ###";
-	else std::cout << "\n### Vectorization disabled ###";
+#else
+		std::cout << "\n### Vectorization disabled ###";
+#endif
 
 	uint64_t seed = 1;
 	rng.hash(&seed, 8);
-	constexpr int intNum = 3 * chs::STREAM_NUM;		//	Number of random integers to reproduce
+	constexpr int intNum = 3 * chs::STREAM_NUM;         //  Number of random integers to reproduce
 	const uint64_t seq[] = {0xFF19D8050B35F999, 0xBEE5BCD522A6B02C, 0x47B6404D5C5C6126, 0x54861788E06BAF94, 0xCAF69BC8580DBCFA, 0x9EA5E106D7ECA532, 0x5C5F406D09D8E3CC, 0x71D62C695EAE5DAB, 0xAF257F14EDDFAA12, 0xB01C9115C1C8906A, 0x186AABDB7E9376C9, 0xAAD8F8EC8D52F128, 0x3A955D966838EA23, 0x19A117775CF10411, 0x3BB3F4E396894105, 0xD96F6CBD3E086F8, 0xD8F2512B07FC1491, 0x637DEFB438E58040, 0xE45BB52624EBFCBC, 0xA33EC29500A36B2F, 0xEFB51F3C96FA12AE, 0xB0978376FB9F5373, 0x85CA42229077C8EC, 0xBB519FB359B2A373};
-	//const uint64_t seq[] = {0x361875134302A945, 0x432AFF072093CCD3, 0x1A1C001962FEED1, 0x32029658A28C6289, 0xFF19D8050B35F999, 0xBEE5BCD522A6B02C, 0x47B6404D5C5C6126, 0x54861788E06BAF94, 0xCAF69BC8580DBCFA, 0x9EA5E106D7ECA532, 0x5C5F406D09D8E3CC, 0x71D62C695EAE5DAB, 0xAF257F14EDDFAA12, 0xB01C9115C1C8906A, 0x186AABDB7E9376C9, 0xAAD8F8EC8D52F128, 0x3A955D966838EA23, 0x19A117775CF10411, 0x3BB3F4E396894105, 0xD96F6CBD3E086F8, 0xD8F2512B07FC1491, 0x637DEFB438E58040, 0xE45BB52624EBFCBC, 0xA33EC29500A36B2F};
-	
+		
 	//
-	//	Output the first intNum successive numbers starting from seed 1
+	//  Output the first intNum successive numbers starting from seed 1
 	//
 	//std::cout << "\n\nconst uint64_t seq[] = {" << std::hex << std::uppercase;
 	//for (int i = 0; i < intNum; i++) std::cout << "0x" << rng.int64() << (i < intNum-1 ? ", " : "");
 	//std::cout << "};\n\n" << std::dec;
 	
 
-	rng.hash(&seed, 8);								//	Hash 1
+	rng.hash(&seed, 8);                     //  Hash 1
 	int fail = -1;
-	std::cout << "\n\n### Reproducing first " << intNum << " pseudo random integers starting from seed 1 ###\n";
+	std::cout << "\n\n### Reproducing first " << intNum << " pseudo-random integers starting from seed 1 ###\n";
 	for (int i = 0; i < intNum; i++) {
 		uint64_t result = rng.int64();
 		//std::cout << std::hex << std::uppercase << "\n0x" << seq[i] << "\t0x" << result << std::dec ;
 		if (seq[i] != result) {
-			fail = i;		//	Store the index of the failed entry
+			fail = i;                       //  Store the index of the failed entry
 			break;
 		}
 	}
@@ -127,13 +156,13 @@ int main() {
 
 	std::cout << "\n### Hashing function (seeding) bit patterns ###\n\n";
 
-	//	Hash 0, 1, 2, 3
+	//  Hash 0, 1, 2, 3
 	for (uint64_t seed = 0; seed < 3; seed ++) {
 		rng.hash(&seed, 8);
 		std::cout << "\t" << seed << "\t->\t" << std::bitset<64>(rng.int64()) << "\n";
 	};
 
-	//	Then system time...
+	//  Then system time...
 	struct timespec time;
 	std::cout << "  -- Consecutive timer reads [" << (sizeof(time) << 3) <<" bits] --\n";
 	for (int i = 1; i <= 3; i++) {
@@ -145,22 +174,22 @@ int main() {
 
 
 
-	//	Initialize built-in routines for benchmarking purposes
-	srand(static_cast<unsigned int>(time.tv_sec));					//	C style RNG
-	std::random_device ranDev;										//	Default C++ std:: RNG
+	//  Initialize built-in routines for benchmarking purposes
+	srand(static_cast<unsigned int>(time.tv_sec));                  //  C style RNG
+	std::random_device ranDev;                                      //  Default C++ std:: RNG
 	std::default_random_engine gen(ranDev());
 	std::uniform_real_distribution<double> distr(0.0, 1.0); 
 
 	//
-	//	Some formatting specification:
+	//  Some formatting specification:
 	//
-	const size_t width = round(log(sqrt(SAMPLE_NUM))/log(10.0));	//	~sqrt(SAMPLE_NUM) relevant digits
+	const size_t width = round(log(sqrt(SAMPLE_NUM))/log(10.0));    //  ~sqrt(SAMPLE_NUM) relevant digits
 	std::cout << std::fixed;
 
 
 
 
-	//	Output first few  UInt64 and U01 random numbers
+	//  Output first few  UInt64 and U01 random numbers
 	std::cout << "\n### Some successive random numbers ###\n\nUInt64:\t\t";
 	for (int i = 0; i < 4; i++) std::cout << rng.int64() << " ";
 	std::cout << "\nUnif[0,1):\t";
@@ -168,38 +197,38 @@ int main() {
 
 
 	//
-	//	Create an array of SAMPLE_NUM size to store random numbers and to do some basic math with them
+	//  Create an array of SAMPLE_NUM size to store random numbers and to do some basic math with them
 	//
-	std::vector<fp64_t> data(SAMPLE_NUM, 0.0);		//	Fill with 0.0 - makes no difference...
+	std::vector<fp64_t> data(SAMPLE_NUM, 0.0);      //      Fill with 0.0 - makes no difference...
 	//
-	//	Array of random variable samplers and their names
+	//  Array of random variable samplers and their names
 	//
 	struct Sampler {
 		std::function<fp64_t()> func;
 		std::string id;
 	};
-	//	Is there a more elegant way to do this?..
+	//  Is there a more elegant way to do this?..
 	std::vector <Sampler> X = {
-		//{.func = [&](){return rng.U01_lcg();},	.id = "LCG    [benchmark]\t"},
-		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;},		.id = "rand()\t[benchmark]\t"},
-		//{.func = [&](){return distr(gen);},		.id = "std::  [benchmark]\t"},
-		{.func = [&](){return rng.U01();},		.id = "U01()\t\t\t"},
-		{.func = [&](){return rng.E1_log();},		.id = "Exp(1)\t[-ln(U01)]\t"},
-		{.func = [&](){return rng.Exp1();},		.id = "Exp1()\t[log approx]\t"},
-		{.func = [&](){return rng.E1();},		.id = "E1()\t[ziggurat]\t"},
-		{.func = [&](){return rng.N01_rej();},	.id = "N(0,1)\t[rejection]\t"},
-		{.func = [&](){return rng.N01_BxM();},	.id = "N(0,1)\t[Box-Muller]\t"},
-		{.func = [&](){return rng.N01();},		.id = "N01()\t[ziggurat]\t"},
-		{.func = [&](){return trunc(rng.U01() * 7);},	.id = "{0...6}\t[truncated]\t"},
-		{.func = [&](){return rng.int64(7);},	.id = "{0...6}\t[64 bit]\t"},
-		{.func = [&](){return rng.int32(7);},	.id = "{0...6}\t[32 bit]\t"}
+		//{.func = [&](){return rng.U01_lcg();}, .id = "LCG    [benchmark]\t"},
+		{.func = [&](){return static_cast<fp64_t>(rand()) / RAND_MAX;}, .id = "rand()\t[benchmark]\t"},
+		//{.func = [&](){return distr(gen);},   .id = "std::  [benchmark]\t"},
+		{.func = [&](){return rng.U01();},      .id = "U01()\t\t\t"},
+		{.func = [&](){return rng.E1_log();},   .id = "Exp(1)\t[-ln(U01)]\t"},
+		{.func = [&](){return rng.Exp1();},     .id = "Exp1()\t[log approx]\t"},
+		{.func = [&](){return rng.E1();},       .id = "E1()\t[ziggurat]\t"},
+		{.func = [&](){return rng.N01_rej();},  .id = "N(0,1)\t[rejection]\t"},
+		{.func = [&](){return rng.N01_BxM();},  .id = "N(0,1)\t[Box-Muller]\t"},
+		{.func = [&](){return rng.N01();},      .id = "N01()\t[ziggurat]\t"},
+		{.func = [&](){return trunc(rng.U01() * 7);}, .id = "{0...6}\t[truncated]\t"},
+		{.func = [&](){return rng.int64(7);},   .id = "{0...6}\t[64 bit]\t"},
+		{.func = [&](){return rng.int32(7);},   .id = "{0...6}\t[32 bit]\t"}
 	};
-	//	A sampler object for warm-up; start with std:: generator
+	//  A sampler object for warm-up; start with std:: generator
 	Sampler tmp = {.func = [&](){return distr(gen);}, .id = ""};
 
 
 	std::cout << "\n\n### Averaging over " << SAMPLE_NUM << " samples; displaying average time per sample ###\n";
-	//	Run std:: generator to "warm-up" the CPU
+	//  Run std:: generator to "warm-up" the CPU
 	
 	std::cout << "  -- Warming up with the awesomly slow std:: generator " << std::flush;
 	result = benchMean(tmp.func, data);
@@ -207,9 +236,9 @@ int main() {
 	std::cout << std::setprecision(1) << refTime / SAMPLE_NUM << "ns" << " --\n";
 	
 
-	flag = 0;										//	Switch off rotating calculations indicator
+	flag = 0;                                       //  Switch off rotating calculations indicator
 	
-	tmp.func = [&](){return rng.U01_lcg();};		//	LCG for baseline time
+	tmp.func = [&](){return rng.U01_lcg();};        //  LCG for baseline time
 	result = benchMean(tmp.func, data);
 	refTime = result.time;
 	std::cout << "  -- Using a simple LCG to estimate the baseline time: " << std::setprecision(1) << refTime / SAMPLE_NUM << "ns" << " --\n";
@@ -217,7 +246,7 @@ int main() {
 
 
 	//
-	//	Iterate over remaining samplers computing mean and variance
+	//  Iterate over remaining samplers computing mean and variance
 	//
 	for (auto sampler { std::begin(X) }; sampler != std::end(X); ++sampler){
 		result = benchMean(sampler->func, data);
@@ -233,3 +262,5 @@ int main() {
 
 	return 0;
 }
+
+

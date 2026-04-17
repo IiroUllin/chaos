@@ -1,231 +1,252 @@
 
+	/*--------------------------------------------------------------+
+	|                                                               |
+	|                 pseudoRNG + related utilities                 |
+	|                     v0.7 (April 16, 2026)                     |
+	|                                                               |
+	|                                                               |
+	|                 Written by Ibrahim Fatkullin                  |
+	|                                                               |
+	|   Terms of use: CC0 1.0                                       |
+	|   http://creativecommons.org/publicdomain/zero/1.0/           |
+	|                                                               |
+	|   To the extent possible under law, the author has dedicated  |
+	|   all copyright and related and neighboring rights to this    |
+	|   software to the public domain worldwide.                    |
+	|                                                               |
+	|   This software is distributed without any warranty.          |
+	|   The author bears no responsibility for anything that        |
+	|   has happened, is happening, may (or may not) be happening   |
+	|   to any person (or entity) which has (or has not) used this  |
+	|   (or any other) software (or hardware) in any imaginable     |
+	|   (or unimaginable) fashion (or lack thereof). 🤪             |
+	|                                                               |
+	+--------------------------------------------------------------*/
 
-	/*----------------------------------------------------------+
-  	|															|
-	|	pseudoRNG + related utilities v0.7 (April 10, 2026)		|
-	|															|
-	+----------------------------------------------------------*/
 
 
 #pragma once
 
 
-#define __CHAOS_HEADER__			//	In case we need to check later
+#define __CHAOS_HEADER__            //  In case we need to check later
 
 
-#include <cstdint>					//	Fixed-width integers; requires C++11
-#include <cmath>					//	Math functions
-#include "generic.hpp"				//	Generic definitions and useful functions
+#include <cstdint>                  //  Fixed-width integers; requires C++11
+#include <cmath>                    //  Math functions
+#include "generic.hpp"              //  Generic definitions and useful functions
 
-
-
-//
-//	The purpose of this library is to provide fast and statistically accurate samplers for common distributions.
-//	At the moment (Spring 2026), a CPU core (Intel 258V) generates about 6.7·10^8 samples per second for simple, 
-//	but nontrivial cases such as exponential or normal distributions.
-//	This amounts to about 2.5·10^13 of samples per 10 hours. For distributions with variance of O(1),
-//	the corresponding sampling error is about 2·10^-7, i.e., about single precision machine epsilon.
-//	This implies that accuracy beyond that is not particularly meaningful for such use cases.
-//	NOTE: some transforms, e.g., ln(x) near x=0, will amplify sampling bias and must be used with caution.
-//	For example, ln((k+1)·2^-n) - ln(k·2^-n) = ln(1+1/k) ~ 1/k, thus the discreteness of ln(x) is very apparent:
-//	even if the argument, x, is discretized with 2^-n precision, ln(x) still has O(1) precision even as n→∞.
-//	We also want to make sure that the tails of distribuitions are captured accurately enough, i.e.,
-//	that the theoretical extreme values reached typical for about 10^13 to 10^14 samples can actually be generated.
-//
-//	NOTE: the expected max. value of n iid N(0,1) samples is about sqrt(2ln(n)); variance ≃1/ln(n).
-//	For 10^14 samples, this impies that large values close to 8 are likely to appear, so we should make that possible.
-//	Similarly, for Exp(1) random variable we are likely to see even larger values, close to ln(n) ≃ 32.
-//
-//	NOTE: I tried integer comparison for acceptance thresholds in ziggurat method,
-//	which involves storing an additional table of P-values.
-//	However this seems to provide at most ~5% speed-up and in some cases, 
-//	even decreases performance (+ uses an extra table).
-//	Thus the current version employs immediate FP conversion and FP comparisons.
-//
 
 
 //
-//	Bit layout for ziggurat algorithm (NOT USED AT THE MOMENT)
-//	63:		Sign bit for symmetric distributions
-//	54-62:	Layer index (2^9 = 512 layers)
-//	0-53:	X value; top 8 bits are compared against acceptance threshold from the table; 31+23 = 54 bits total
-//	0-22:	Y value: uses single precision accuracy; NOTE: overlaps with lower bits of X, so some stat. bias exists
-//	See typedef ZigguratTable for table specs
+//  The purpose of this library is to provide fast and statistically accurate samplers for common distributions.
+//  At the moment (Spring 2026), a CPU core (Intel 258V) generates about 6.7·10^8 samples per second for simple, 
+//  but nontrivial cases such as exponential or normal distributions.
+//  This amounts to about 2.5·10^13 of samples per 10 hours. For distributions with variance of O(1),
+//  the corresponding sampling error is about 2·10^-7, i.e., about single precision machine epsilon.
+//  This implies that accuracy beyond that is not particularly meaningful for such use cases.
+//  NOTE: some transforms, e.g., ln(x) near x=0, will amplify sampling bias and must be used with caution.
+//  For example, ln((k+1)·2^-n) - ln(k·2^-n) = ln(1+1/k) ~ 1/k, thus the discreteness of ln(x) is very apparent:
+//  even if the argument, x, is discretized with 2^-n precision, ln(x) still has O(1) precision even as n→∞.
+//  We also want to make sure that the tails of distribuitions are captured accurately enough, i.e.,
+//  that the theoretical extreme values reached typical for about 10^13 to 10^14 samples can actually be generated.
+//
+//  NOTE: the expected max. value of n iid N(0,1) samples is about sqrt(2ln(n)); variance ≃1/ln(n).
+//  For 10^14 samples, this impies that large values close to 8 are likely to appear, so we should make that possible.
+//  Similarly, for Exp(1) random variable we are likely to see even larger values, close to ln(n) ≃ 32.
+//
+//  NOTE: I tried integer comparison for acceptance thresholds in ziggurat method,
+//  which involves storing an additional table of P-values.
+//  However this seems to provide at most ~5% speed-up and in some cases, 
+//  even decreases performance (+ uses an extra table).
+//  Thus the current version employs immediate FP conversion and FP comparisons.
+//
+
+
+//
+//  Bit layout for ziggurat algorithm (NOT USED AT THE MOMENT)
+//  63:     Sign bit for symmetric distributions
+//  54-62:  Layer index (2^9 = 512 layers)
+//  0-53:   X value; top 8 bits are compared against acceptance threshold from the table; 31+23 = 54 bits total
+//  0-22:   Y value: uses single precision accuracy; NOTE: overlaps with lower bits of X, so some stat. bias exists
+//  See typedef ZigguratTable for table specs
 //
 
 //
-//	For compatibility between various SIMD versions, we run chs::STREAM_NUM parallel 128 bit states (bit streams)
-//	initially generated by xoroshiro128's <jump> function from the first one (generated using a hash function).
-//	The streams are processed simultaneously, as permitted by the architecture, in chunks of 2 (AVX2), or 4 (AVX512).
-//	The states are stored in i64[]; f64[] is used to cache the corresponding Uniform[0,1) numbers.
-//	This RNG should provide the same bit sequences regardless of the employed architecture (fp64 values could differ).
+//  For compatibility between various SIMD versions, we run chs::STREAM_NUM parallel 128 bit states (bit streams)
+//  initially generated by xoroshiro128's <jump> function from the first one (generated using a hash function).
+//  The streams are processed simultaneously, as permitted by the architecture, in chunks of 4 (AVX2), or 8 (AVX512).
+//  The states are stored in i64[]; f64[] is used to cache the corresponding Uniform[0,1) numbers.
+//  This RNG should provide the same bit sequences regardless of the employed architecture (fp64 values could differ).
 //
 
 
 
 namespace chs {
 	//
-	//	The following constants depend on the width of the available SIMD registers.
-	//	Uses constants defined in generic.hpp
+	//  The following constants depend on the width of the available SIMD registers.
+	//  Uses constants defined in generic.hpp
 	//
-	constexpr int SIMD_BLOCK = 1 << __SIMD__;				//	#qwords for vectorization: 2^3=8 for AVX512; 2^2=4 for AVX2; 2^0=1 otherwise
+#ifdef __SIMD__
+	constexpr int SIMD_BLOCK = 1 << __SIMD__;               //  #qwords for vectorization: 2^3=8 for AVX512; 2^2=4 for AVX2
+#else
+	constexpr int SIMD_BLOCK = 1;                           //  No vectorization enabled: block size 1
+#endif
 	//
-	//	Constants prescribing layout of RNG structure
-	//	
-	constexpr int STREAM_NUM = 8;							//	Number of bit streams for SIMD processing; should be a power of 2
-															//	8 ⨉ 64 bits = 512 bits -- size of AVX12 registers; total 128 bytes for all states
-	constexpr int BLOCK_NUM = STREAM_NUM >> __SIMD__;		//	Same as STREAM_NUM / SIMD_BLOCK -- number of SIMD blocks
+	//  Constants prescribing layout of RNG structure
+	//  
+	constexpr int STREAM_NUM = 8;                           //  Number of bit streams for SIMD processing; should be a power of 2
+															//  8 ⨉ 64 bits = 512 bits -- size of AVX12 registers; total 128 bytes for all states
+	constexpr int BLOCK_NUM = STREAM_NUM / SIMD_BLOCK;      //  Number of blocks for vectorized processing.
 	//
-	//	The state of xoroshiro128+ consists of two qwords (64 + 64 bits)
-	//	_L[i] and _H[i] contain locations of these qwords for ith stream in i64[] array of the RNG object (see below as well)
-	//	It is possible to use arithmetic instead of tabulating these numbers, but this seems marginally faster...
+	//  The state of xoroshiro128+ consists of two qwords (64 + 64 bits)
+	//  _L[i] and _H[i] contain locations of these qwords for ith stream in i64[] array of the RNG object (see below as well)
+	//  It is possible to use arithmetic instead of tabulating these numbers, but this seems marginally faster...
 	//
 #ifdef __AVX512__
-	constexpr int _L[] = {0, 1, 2,  3,  4,  5,  6,  7};		//	Lower qwords of the ith state
-	constexpr int _H[] = {8, 9, 10, 11, 12, 13, 14, 15};	//	Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK (8)
+	constexpr int _L[] = {0, 1, 2,  3,  4,  5,  6,  7};     //  Lower qwords of the ith state
+	constexpr int _H[] = {8, 9, 10, 11, 12, 13, 14, 15};    //  Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK (8)
 #elif defined __AVX2__
-	constexpr int _L[] = {0, 1, 2, 3, 8,  9,  10, 11};		//	Lower qwords of the ith state
-	constexpr int _H[] = {4, 5, 6, 7, 12, 13, 14, 15};		//	Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK	(4)	
+	constexpr int _L[] = {0, 1, 2, 3, 8,  9,  10, 11};      //  Lower qwords of the ith state
+	constexpr int _H[] = {4, 5, 6, 7, 12, 13, 14, 15};      //  Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK	(4)	
 #else
-	constexpr int _L[] = {0, 2, 4, 6, 8, 10, 12, 14};		//	Lower qwords of the ith state
-	constexpr int _H[] = {1, 3, 5, 7, 9, 11, 13, 15};		//	Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK	(1)	
+	constexpr int _L[] = {0, 2, 4, 6, 8, 10, 12, 14};       //  Lower qwords of the ith state
+	constexpr int _H[] = {1, 3, 5, 7, 9, 11, 13, 15};       //  Higher qwords of the ith state H[i] = L[i] + SIMD_BLOCK	(1)	
 #endif
 
 
 
 	//
-	//	Ziggurat parameters
+	//  Ziggurat parameters
 	//
-	constexpr int ZIG_SIZE_L2 = 9;						//	log2 of the size of ziggurat tables; currently fixed, as all...
-	constexpr int ZIG_SIZE = 1 << ZIG_SIZE_L2;			//	...tables are packed into the same data structure type (below).
+	constexpr int ZIG_SIZE_L2 = 9;                          //  log2 of the size of ziggurat tables; currently fixed, as all...
+	constexpr int ZIG_SIZE = 1 << ZIG_SIZE_L2;              //...tables are packed into the same data structure type (below).
 	
 	//
-	//	Data structure for ziggurat tables
-	//	Layer 0: top; layer ZIG_SIZE-1: the irregular (bottom) layer
-	//	P[i]: acceptance threshold in ith layer {0..255} P[0] = 0 -- automatic rejection; P[i] = floor(256 * X[i-1]/X[i]) -- NOT USED ATM
-	//	X[i]: scaling factor for i-th layer (its length); (length + 1.0 for the bottom layer)
-	//	Y[i]: y-coordinate for i-th layer; Y[0] = 1
+	//  Data structure for ziggurat tables
+	//  Layer 0: top; layer ZIG_SIZE-1: the irregular (bottom) layer
+	//  P[i]: acceptance threshold in ith layer {0..255} P[0] = 0 -- automatic rejection; P[i] = floor(256 * X[i-1]/X[i]) -- NOT USED ATM
+	//  X[i]: scaling factor for i-th layer (its length); (length + 1.0 for the bottom layer)
+	//  Y[i]: y-coordinate for i-th layer; Y[0] = 1
 	//
-	typedef fp64_t (*PDF)(fp64_t);				//	Function pointer type for PDF calls 
+	typedef fp64_t (*PDF)(fp64_t);                          //  Function pointer type for PDF calls 
 
 	struct ZigguratTable {
-		uint64_t sgn;							//	If true, symmetrize the distribution
-		PDF pdf;								//	PDF of the distribution
-		bool exp;								//	No additional comparison is required in the tail, e.g., for Exp() distribution
-		fp64_t X[ZIG_SIZE + 1];					//	Table of X values; X[ZIG_SIZE] = X[ZIG_SIZE - 1] + 1.0
-		fp64_t Y[ZIG_SIZE + 1];					//	Table of Y values; Y[ZIG_SIZE] = Y[ZIG_SIZE - 1] * exp(X[ZIG_SIZE - 1])
+		uint64_t sgn;                                       //  If true, symmetrize the distribution
+		PDF pdf;                                //  PDF of the distribution
+		bool exp;                               //  No additional comparison is required in the tail, e.g., for Exp() distribution
+		fp64_t X[ZIG_SIZE + 1];                 //  Table of X values; X[ZIG_SIZE] = X[ZIG_SIZE - 1] + 1.0
+		fp64_t Y[ZIG_SIZE + 1];                 //  Table of Y values; Y[ZIG_SIZE] = Y[ZIG_SIZE - 1] * exp(X[ZIG_SIZE - 1])
 	};
 
 
 	//
 	//	Object containing the RNG state and functions
 	//
-	class alignas(64) RNG {						//	Always 64 now; was __SIMD_ALIGN__ from "generic.hpp"
+	class alignas(64) RNG {                     //  Always 64 now; was __SIMD_ALIGN__ from "generic.hpp"
 		private:
-			uint64_t		i64[2 * STREAM_NUM] = {0};	//	RNG state; 2 qwords per stream
-			//	Single stream of xoroshiro128+ requires two qwords; call them L and H
-			//	Memory layout of these states in i64[]:
-			//		L0.H0...L7.H7						--	No vectorization: index(H[n]) = index(L[n])+1;	SIMD_BLOCK = 1
-			//		L0...L3.H0...H3.L4...L7.H4...H7		--	AVX2: index(H[n]) = index(L[n]) + 4;			SIMD_BLOCK = 4
-			//		L0...L7.H0...H7						--	AVX512: index(H[n]) = index(L[n]) + 8;			SIMD_BLOCK = 8
-			//	This layout seems most reasonable for x86-64 CPUs with 64 byte cache line (2026) No idea about ARM...
+			uint64_t        i64[2 * STREAM_NUM] = {0}; //  RNG state; 2 qwords per stream
+			//  Single stream of xoroshiro128+ requires two qwords; call them L and H
+			//  Memory layout of these states in i64[]:
+			//      L0.H0...L7.H7                       --  No vectorization: index(H[n]) = index(L[n])+1;  SIMD_BLOCK = 1
+			//      L0...L3.H0...H3.L4...L7.H4...H7     --  AVX2: index(H[n]) = index(L[n]) + 4;            SIMD_BLOCK = 4
+			//      L0...L7.H0...H7                     --  AVX512: index(H[n]) = index(L[n]) + 8;          SIMD_BLOCK = 8
+			//  This layout seems most reasonable for x86-64 CPUs with 64 byte cache line (2026) No idea about ARM...
 			//
-			fp64_t			f64[STREAM_NUM];			//	U01 random numbers generated from i64[]
-			union {										//	Cache for Gaussians; NaN when empty 
-				uint64_t	icache = NaN;
-				fp64_t 		cache;
+			fp64_t          f64[STREAM_NUM];            //  U01 random numbers generated from i64[]
+			union {                                     //  Cache for Gaussians; NaN when empty 
+				uint64_t    icache = NaN;
+				fp64_t      cache;
 			};
 
-			//	Index of the stream for current output; should be in [0..2*STREAM_NUM - 2]
-			//	i64[L[activeStream]] and i64[H[activeStream]] hold the active RNG state
+			//  Index of the stream for current output; should be in [0..2*STREAM_NUM - 2]
+			//  i64[L[activeStream]] and i64[H[activeStream]] hold the active RNG state.
 
-			int				activeStream = 0;
+			int             activeStream = 0;
 
 			/*------------------------------------------+
-			|				PRIVATE METHODS				|
+			|               PRIVATE METHODS             |
 			+------------------------------------------*/
 
-			//	Advance to the next bit stream;
-			//	generate new states in all bit streams and cache f64[] when needed
-			void			next();
+			//  Advance to the next bit stream;
+			//  generate new states in all bit streams and cache f64[] as needed.
+			void            next();
 
-			//	General ziggurat algorithm with exponential tail
-			//	This implementation may be about 5-10% slower than distribution-specific due to algorithmic overheads.
-			fp64_t			zig(const ZigguratTable &zt);
+			//  General ziggurat algorithm with exponential tail.
+			//  This implementation may be about 5-10% slower than distribution-specific due to algorithmic overheads.
+			fp64_t          zig(const ZigguratTable &zt);
 
-			//	Fill out all the bit stream states via xoroshiro's long jump starting from the first stream.
-			//	Should be called after hashing/cloning/modifying the first stream. 
-			void			update_streams();
+			//  Fill out all the bit stream states via xoroshiro's long jump starting from the first stream.
+			//  Should be called after hashing/cloning/modifying the first stream. 
+			void            update_streams();
 
 		public:
 			//
-			//	Basic access functions
+			//  Basic access functions
 			//
 
 
-			//	Use the following functions to get next 32 or 64 bit integer or 64 bit floating point [0,1) numbers.
-			//	These should all be inlined by the compiler.
-			uint64_t		int64(){				//	random 64 bits (uint64); implicitly inlining
-				//	get uint64 directly from the <state> according to xoroshiro
+			//  Use the following functions to get next 32 or 64 bit integer or 64 bit floating point [0,1) numbers.
+			uint64_t        int64(){                //  random 64 bits (uint64); implicitly inlining
+				//  get uint64 directly from the <state> according to xoroshiro128+
 				uint64_t result = i64[_L[activeStream]] + i64[_H[activeStream]];
-				next();								//	Move to the next stream; generate new bits if needed
+				next();                             //  Move to the next stream; generate new bits when needed
 				return result;
 			};
-			uint32_t 		int32(){				//	random 32 bits (uint32)
-				return int64() >> 32;				//	Top 32 bits should have the best quality
+			uint32_t        int32(){                //  random 32 bits (uint32)
+				return int64() >> 32;               //  Top 32 bits should have the best quality
 			};
-			fp64_t			U01(){					//	Uniform[0,1)
-				fp64_t result = f64[activeStream];	//	FP value from the current stream
-				next();								//	Move to the next stream; generate new bits if needed
+			fp64_t          U01(){                  //  Uniform[0,1)
+				fp64_t result = f64[activeStream];  //  FP value from the current stream
+				next();                             //  Move to the next stream; generate new bits if needed
 				return result;
 			};
 
 
 			//
-			//	Various distributions
+			//  Various distributions
 			//
-			uint64_t	int64(const uint64_t N);			//	random 64 bit integer in [0..N-1]
-			uint32_t	int32(const uint32_t N);			//	random 32 bit integer in [0..N-1] -- slightly faster than int64()
+			uint64_t    int64(const uint64_t N);            //  random 64 bit integer in [0..N-1]
+			uint32_t    int32(const uint32_t N);            //  random 32 bit integer in [0..N-1] -- may be slightly faster than int64()
 															//
-			fp64_t		E1();								//	Exp(1) via ziggurat
-			fp64_t		Ez();								//	Exp(1) via optimized ziggurat
-			fp64_t		Exp1();								//	Exp(1) via ln(∙) approximation; called from zig() for the tail
-			fp64_t		E(const fp64_t a) {					//	Exp(a), calling E1()
+			fp64_t      E1();                               //  Exp(1) via ziggurat
+			fp64_t      Ez();                               //  Exp(1) via optimized ziggurat
+			fp64_t      Exp1();                             //  Exp(1) via ln(∙) approximation; called from zig() for the tail
+			fp64_t      E(const fp64_t a) {                 //  Exp(a), calling E1()
 				return a * E1();}
-			fp64_t		N01();								//	N(0,1) Gaussian via ziggurat
-			fp64_t		Nz();								//	N(0,1) Gaussian via optimized ziggurat
-			fp64_t		U(const fp64_t a, const fp64_t b) {	//	Uniform[a,b)
+			fp64_t      N01();                              //  N(0,1) Gaussian via ziggurat
+			fp64_t      Nz();                               //  N(0,1) Gaussian via optimized ziggurat
+			fp64_t      U(const fp64_t a, const fp64_t b) { //  Uniform[a,b)
 				return a + (b - a) * U01();}
 
 
 			//
-			//	Utility functions
+			//  Utility functions
 			//
-			//	Clone the state
+			//  Clone the state
 			//
-			//	Hashing function for seeding the RNG state
-			//	<data> is supposed to be 64 bit (8 byte) aligned; <length> >= 8 (in bytes)
-			//	WARNING: data is consumed in 64 bit chunks:
-			//	...if <length> is not divisible by 8, the left-overs are not utilized
-			void		hash(const void* data, std::size_t length);
+			//  Hashing function for seeding the RNG state
+			//  <data> is supposed to be 64 bit (8 byte) aligned; <length> >= 8 (in bytes)
+			//  WARNING: data is consumed in 64 bit chunks:
+			//  ...if <length> is not divisible by 8, the left-overs are not utilized
+			void        hash(const void* data, std::size_t length);
 
 
 			//
-			//	Some extra functions or alternative implementations for testing purposes
+			//  Some extra functions or alternative implementations for testing purposes
 			//
 
 			//
-			//	Knuth's MMIX RNG: LCG generator employing just i64[0]
-			//	Use for testing and benchmarking purposes only: does not invoke next()
+			//  Knuth's MMIX RNG: LCG generator employing just i64[0]
+			//  Use for testing and benchmarking purposes only: does not invoke next()
 			//
-			fp64_t		U01_lcg(){
+			fp64_t      U01_lcg(){
 				i64[0] = i64[0] * 6364136223846793005 + 1442695040888963407;
 				return FP01(i64[0]);}
-			fp64_t		E1_log(){			//	Exp(1) via -log(U01)
-				return -log(U01());};		//	Should subtract from 1 to avoid NaN if U01 takes 0 value if used in production
-			fp64_t		N01_bin();			//	quick "Gaussian" with 0 mean and variance 1 via Binom(64,1/2) approximation
-			fp64_t		N01_rej();			//	Gaussian with 0 mean and variance 1 via rejection sampling
-			fp64_t		N01_BxM();			//	Another N(0,1) Gaussian via Box-Muller
+			fp64_t      E1_log(){           //  Exp(1) via -log(U01)
+				return -log(U01());};       //  Should subtract from 1 to avoid NaN if U01 takes 0 value if used in production
+			fp64_t      N01_bin();          //  quick "Gaussian" with 0 mean and variance 1 via Binom(64,1/2) approximation
+			fp64_t      N01_rej();          //  Gaussian with 0 mean and variance 1 via rejection sampling
+			fp64_t      N01_BxM();          //  Another N(0,1) Gaussian via Box-Muller
 	};
 
 
@@ -233,40 +254,40 @@ namespace chs {
 
 
 	/*------------------------------------------------------------------------------+
-	|																				|
-	| 	Mixers: fast hash functions producing "random" output from the <state>		|
-	|	These are not necessarily best for RNG when used to produce a sequence		|
-	|	of numbers: their primary purpose is to maximize bit mixing (avalanching)	|
-	|	after single use...															|
-	|																				|
+	|                                                                               |
+	|    Mixers: fast hash functions producing "random" output from the <state>     |
+	|    These are not necessarily best for RNG when used to produce a sequence     |
+	|    of numbers: their primary purpose is to maximize bit mixing (avalanching)  |
+	|    after single use...                                                        |
+	|                                                                               |
 	+------------------------------------------------------------------------------*/
 
 
 
 
-	inline uint8_t mix8(const uint8_t state) {			//	Random stuff: not optimized
+	inline uint8_t mix8(const uint8_t state) {          //  Random stuff: not optimized
 		return state * 97 + 111;
 	}
 
 
 	//
-	//	One of C. Wellon's mixers (-Imn6); see below for the link
+	//  One of C. Wellon's mixers (-Imn6); see below for the link
 	//
 	inline uint16_t mix16(uint16_t state) {
-    	state += state << 7; state ^= state >> 8;
-    	state += state << 3; state ^= state >> 2;
-    	state += state << 4; 
-    	return state ^ (state >> 8);
+		state += state << 7; state ^= state >> 8;
+		state += state << 3; state ^= state >> 2;
+		state += state << 4; 
+		return state ^ (state >> 8);
 	}
 
 
 	//
-	//	Prospector, https://github.com/skeeto/hash-prospector
-	//	Attribution: C. Wellon; public domain
-	//	Check the link for even faster mixers with slightly higher bias
+	//  Prospector, https://github.com/skeeto/hash-prospector
+	//  Attribution: C. Wellon; public domain
+	//  Check the link for even faster mixers with slightly higher bias
 	//
 	inline uint32_t mix32(uint32_t state) {
-		state++;										//	Not needed, but prevents 0->0 and even slightly improves mixing
+		state++;                                        //  Not needed, but prevents 0->0 and even slightly improves mixing
 		state = (state ^ (state >> 17)) * 0xed5ad4bbU;
 		state = (state ^ (state >> 11)) * 0xac4c1b51U;
 		state = (state ^ (state >> 15)) * 0x31848babU;
@@ -275,11 +296,11 @@ namespace chs {
 
 
 	//
-	//	SplitMix64 algorithm (used, e.g., in Java)
-	//	Attribution: S. Vigna, 2015; public domain
-	//	NOTE: when SplitMix64() is used as an RNG, 
-	//	the new <state> is the incremented value 
-	//	from the first line, not the returned value
+	//  SplitMix64 algorithm (used, e.g., in Java)
+	//  Attribution: S. Vigna, 2015; public domain
+	//  NOTE: when SplitMix64() is used as an RNG, 
+	//  the new <state> is the incremented value 
+	//  from the first line, not the returned value
 	//
 	inline uint64_t mix64(uint64_t state) {
 		state += 0x9e3779b97f4a7c15U;
